@@ -1,9 +1,13 @@
 namespace HomeVault.Core.Sync;
 
-public enum SyncActionKind { CreateFolder, Copy, Update, Delete, DeleteFolder, FixCase }
+public enum SyncActionKind { CreateFolder, Copy, Update, Delete, DeleteFolder, FixCase, Move }
 
-/// <summary>One step of a sync. Paths are relative to both roots and use '/'.</summary>
-public sealed record SyncAction(SyncActionKind Kind, string Path, long Size = 0, string? TargetPath = null);
+/// <summary>
+/// One step of a sync. Paths are relative to both roots and use '/'.
+/// For <see cref="SyncActionKind.Move"/>, <c>Path</c> is the new place and <c>TargetPath</c> the old place on the backup disk.
+/// <c>MtimeUtc</c> is the modification time of the file the action is about (used to detect moves).
+/// </summary>
+public sealed record SyncAction(SyncActionKind Kind, string Path, long Size = 0, string? TargetPath = null, DateTime MtimeUtc = default);
 
 public sealed record SyncPlan(
     IReadOnlyList<string> Folders,
@@ -32,7 +36,8 @@ public sealed record SyncReport(
     long BytesCopied,
     IReadOnlyList<SyncError> Errors,
     IReadOnlyList<string> Skipped,
-    bool Canceled)
+    bool Canceled,
+    int Moved = 0)
 {
     public bool Success => !Canceled && Errors.Count == 0;
 }

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { AlertTriangle, CheckCircle2, Clock, FolderSync, HardDrive, History, RefreshCw, Settings2, Usb, X } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, Clock, FolderSync, HardDrive, History, RefreshCw, Settings2, Usb, X } from 'lucide-react'
 import { api } from './api'
 import { confirmDialog, promptDialog, toast, toastError } from './dialogs'
 import { FileIcon } from './FileIcon'
 import { formatDate, formatSize } from './format'
-import type { AfterSync, Disk, FileEntry, SyncJob, SyncPlanResult, SyncReport } from './types'
+import type { AfterSync, Disk, FileEntry, SmartInfo, SyncJob, SyncPlanResult, SyncReport } from './types'
 
 const stateText = (d: Disk) =>
   d.state === 'off' ? 'Kapalı · çıkarılabilir' : d.power === 'standby' ? 'Uykuda' : d.state === 'mounted' ? 'Açık · kullanımda' : 'Açık'
@@ -93,6 +93,9 @@ export function DisksView({ onChanged }: { onChanged: () => void }) {
 function DiskCard({ disk: d, busy, onToggle, onAdopt, onSync, onSettings, onHistory }: {
   disk: Disk; busy: boolean; onToggle: () => void; onAdopt: () => void; onSync: () => void; onSettings: () => void; onHistory: () => void
 }) {
+  const health = d.state !== 'off' ? (
+    <button className="btn" onClick={() => healthDialog(d)} title="Disk sağlığı"><Activity size={16} /> Sağlık</button>
+  ) : null
   const used = d.usage ? d.usage.total - d.usage.free : null
   const pct = d.usage && d.usage.total ? (used! / d.usage.total) * 100 : 0
   const on = d.state !== 'off'
@@ -123,7 +126,10 @@ function DiskCard({ disk: d, busy, onToggle, onAdopt, onSync, onSettings, onHist
       {!d.adopted ? (
         <div className="disk-actions">
           <p className="muted small">Bu disk henüz yedek diski değil. Yedek diski yaptığında içindeki dosyalara dokunulmaz; sadece seçtiğin klasörler eşitlenir.</p>
-          <button className="btn primary" disabled={busy} onClick={onAdopt}>Yedek diski yap</button>
+          <div className="disk-actions row">
+            <button className="btn primary" disabled={busy} onClick={onAdopt}>Yedek diski yap</button>
+            {health}
+          </div>
         </div>
       ) : (
         <>
@@ -146,6 +152,7 @@ function DiskCard({ disk: d, busy, onToggle, onAdopt, onSync, onSettings, onHist
             <button className="btn primary" disabled={busy || d.folders.length === 0} onClick={onSync}><FolderSync size={16} /> Eşitle</button>
             <button className="btn" onClick={onSettings}><Settings2 size={16} /> Ayarlar</button>
             <button className="btn" onClick={onHistory}><History size={16} /> Geçmiş</button>
+            {health}
           </div>
         </>
       )}
@@ -174,7 +181,7 @@ function JobCard({ job }: { job: SyncJob }) {
       {r && (
         <p className="small">
           {r.canceled ? 'Durduruldu. ' : ''}
-          {r.copied} yeni, {r.updated} değişen dosya kopyalandı · <b>{r.verified} dosya diskten geri okunup doğrulandı</b> · {r.deleted} öğe diskteki çöp kutusuna taşındı
+          {r.copied} yeni, {r.updated} değişen dosya kopyalandı{r.moved > 0 ? `, ${r.moved} dosya taşındı (tekrar kopyalanmadı)` : ''} · <b>{r.verified} dosya diskten geri okunup doğrulandı</b> · {r.deleted} öğe diskteki çöp kutusuna taşındı
           {r.errors.length > 0 && <span className="err-text"> · {r.errors.length} hata</span>}
           {r.skipped.length > 0 && <span className="muted"> · {r.skipped.length} atlandı</span>}
         </p>
@@ -195,7 +202,7 @@ function mountDialog<T>(render: (done: (v: T) => void) => React.ReactNode): Prom
   })
 }
 
-const kindText: Record<string, string> = { Copy: 'Yeni', Update: 'Değişti', Delete: 'Silinecek', DeleteFolder: 'Silinecek', FixCase: 'Ad düzeltme' }
+const kindText: Record<string, string> = { Move: 'Taşınacak', Copy: 'Yeni', Update: 'Değişti', Delete: 'Silinecek', DeleteFolder: 'Silinecek', FixCase: 'Ad düzeltme' }
 
 function planDialog(d: Disk, plan: SyncPlanResult): Promise<boolean> {
   const s = plan.summary
@@ -204,19 +211,20 @@ function planDialog(d: Disk, plan: SyncPlanResult): Promise<boolean> {
     <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && done(false)}>
       <div className="modal wide">
         <h3 className="modal-h">{d.name} ile eşitle</h3>
-        {s.copy + s.update + s.delete + s.createFolders === 0 ? (
+        {s.copy + s.update + s.delete + s.move + s.createFolders === 0 ? (
           <p className="ok-text">Her şey zaten eşit, değişiklik yok.</p>
         ) : (
           <>
             <div className="plan-stats">
               <div><b>{s.copy}</b><span>yeni dosya</span></div>
+              {s.move > 0 && <div><b>{s.move}</b><span>taşınacak</span></div>}
               <div><b>{s.update}</b><span>değişen</span></div>
               <div><b>{s.delete}</b><span>silinecek*</span></div>
               <div><b>{formatSize(s.bytes)}</b><span>yazılacak</span></div>
             </div>
             <p className={`small ${fits ? 'muted' : 'err-text'}`}>Diskte {formatSize(plan.free)} boş.{!fits && ' Yer yetmiyor!'}</p>
             <ul className="plan-list">
-              {plan.actions.map((a, i) => <li key={i}><span className={`tag ${a.kind}`}>{kindText[a.kind] ?? a.kind}</span> {a.path}</li>)}
+              {plan.actions.map((a, i) => <li key={i}><span className={`tag ${a.kind}`}>{kindText[a.kind] ?? a.kind}</span> {a.kind === 'Move' ? `${a.targetPath} → ${a.path}` : a.path}</li>)}
             </ul>
             <p className="muted small">* Silinen ve değişen dosyaların eski hâli diskte <code>.homevault-trash</code> klasöründe 30 gün saklanır.</p>
           </>
@@ -224,7 +232,7 @@ function planDialog(d: Disk, plan: SyncPlanResult): Promise<boolean> {
         {plan.skipped.length > 0 && <p className="small err-text">{plan.skipped.length} öğe atlanacak: {plan.skipped.slice(0, 3).join(', ')}</p>}
         <p className="muted small">Sonra: {afterText[d.after ?? 'PowerOff']}.</p>
         <div className="modal-actions">
-          {s.copy + s.update + s.delete + s.createFolders === 0 ? (
+          {s.copy + s.update + s.delete + s.move + s.createFolders === 0 ? (
             <button className="btn primary" onClick={() => done(false)} autoFocus>Tamam</button>
           ) : (
             <>
@@ -338,3 +346,38 @@ function HistoryBody({ d, done }: { d: Disk; done: () => void }) {
 const historyDialog = (d: Disk) => mountDialog<void>(done => <HistoryBody d={d} done={() => done()} />)
 
 
+
+function HealthBody({ d, done }: { d: Disk; done: () => void }) {
+  const [info, setInfo] = useState<SmartInfo | null>(null)
+  useEffect(() => { api.smart(d.id).then(setInfo).catch(e => { toastError(e); done() }) }, [d.id, done])
+  const bad = !!info && (info.passed === false || (info.pending ?? 0) > 0 || (info.reallocated ?? 0) > 0 || (info.uncorrectable ?? 0) > 0)
+  return (
+    <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && done()}>
+      <div className="modal wide">
+        <h3 className="modal-h">{d.name} · disk sağlığı</h3>
+        {!info ? <span className="spinner" /> : !info.available ? (
+          <p className="muted">{d.kind === 'virtual' ? 'Bu bir sanal test diski, sağlık bilgisi yok.' : 'Bu USB kutusu disk sağlık bilgisini vermiyor. Bazı kutular bunu desteklemez.'}</p>
+        ) : (
+          <>
+            <p className={bad ? 'err-text' : 'ok-text'}>
+              {bad ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}{' '}
+              {bad ? 'Dikkat: disk hata belirtileri gösteriyor. Önemli dosyaların başka bir yerde de kopyası olsun.' : 'Disk sağlıklı görünüyor.'}
+            </p>
+            <dl className="pv-meta health">
+              <dt>Genel sağlık testi</dt><dd>{info.passed == null ? '—' : info.passed ? 'Geçti' : 'BAŞARISIZ'}</dd>
+              <dt>Sıcaklık</dt><dd>{info.temperature != null ? `${info.temperature} °C` : '—'}</dd>
+              <dt>Çalışma süresi</dt><dd>{info.powerOnHours != null ? `${info.powerOnHours.toLocaleString('tr-TR')} saat (~${Math.round(info.powerOnHours / 24 / 30)} ay)` : '—'}</dd>
+              <dt>Yer değiştiren sektör</dt><dd>{info.reallocated ?? '—'}</dd>
+              <dt>Bekleyen bozuk sektör</dt><dd>{info.pending ?? '—'}</dd>
+              <dt>Düzeltilemeyen hata</dt><dd>{info.uncorrectable ?? '—'}</dd>
+            </dl>
+            <p className="muted small">Sıfırdan büyük sektör değerleri diskin yıprandığını gösterir. Artıyorsa diski değiştirmeyi düşün.</p>
+          </>
+        )}
+        <div className="modal-actions"><button className="btn" onClick={done}>Kapat</button></div>
+      </div>
+    </div>
+  )
+}
+
+const healthDialog = (d: Disk) => mountDialog<void>(done => <HealthBody d={d} done={() => done()} />)

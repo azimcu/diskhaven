@@ -1,4 +1,4 @@
-import type { AfterSync, AuthState, Disk, FileEntry, Listing, SyncJob, SyncPlanResult, SyncReport, SyncSchedule, TrashItem } from './types'
+import type { AfterSync, AuthState, Disk, FileEntry, Listing, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem } from './types'
 import { translateServerMessage } from './strings'
 
 export class ApiError extends Error {
@@ -70,6 +70,7 @@ export const api = {
   forgetDisk: (id: string) => request<void>('DELETE', `/api/disks/${encodeURIComponent(id)}`),
   updateDisk: (id: string, patch: { name?: string; folders?: string[]; schedule?: SyncSchedule; after?: AfterSync }) =>
     request<unknown>('PUT', `/api/disks/${encodeURIComponent(id)}`, patch),
+  smart: (id: string) => request<SmartInfo>('GET', `/api/disks/${encodeURIComponent(id)}/smart`),
   planSync: (id: string) => request<SyncPlanResult>('POST', `/api/disks/${encodeURIComponent(id)}/plan`),
   startSync: (id: string) => request<SyncJob>('POST', `/api/disks/${encodeURIComponent(id)}/sync`),
   syncJob: () => request<SyncJob | null>('GET', '/api/sync/job'),

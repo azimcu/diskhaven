@@ -28,7 +28,68 @@ public static class SyncPlanner
             }
             Compare(source, Path.Combine(targetRoot, folder), folder, actions, skipped, ct);
         }
-        return new SyncPlan(list, actions, skipped, DateTimeOffset.UtcNow);
+        return new SyncPlan(list, DetectMoves(actions, targetRoot), skipped, DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>
+    /// A file that disappeared from one place on the backup and appeared in another with the same size
+    /// and time was probably renamed or moved: move it on the backup instead of copying it again.
+    /// The executor checks the content before moving, so a wrong guess only costs a normal copy.
+    /// Actions are also put in a safe order: case fixes, new folders, moves, copies, deletes.
+    /// </summary>
+    internal static IReadOnlyList<SyncAction> DetectMoves(List<SyncAction> actions, string targetRoot)
+    {
+        // files that are about to leave the backup: single deletes, and everything inside deleted folders
+        var gone = new List<(string Path, long Size, DateTime Mtime, SyncAction? Delete)>();
+        foreach (var a in actions)
+        {
+            if (a.Kind == SyncActionKind.Delete && a.Size > 0)
+                gone.Add((a.Path, a.Size, a.MtimeUtc, a));
+            else if (a.Kind == SyncActionKind.DeleteFolder)
+            {
+                var dir = Path.Combine(targetRoot, a.Path.Replace('/', Path.DirectorySeparatorChar));
+                if (!Directory.Exists(dir))
+                    continue;
+                foreach (var f in new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.AllDirectories))
+                    if (f.Length > 0 && f.LinkTarget is null)
+                        gone.Add((a.Path + "/" + Path.GetRelativePath(dir, f.FullName).Replace(Path.DirectorySeparatorChar, '/'),
+                            f.Length, f.LastWriteTimeUtc, null));
+            }
+        }
+        var bySize = gone.GroupBy(g => g.Size).ToDictionary(g => g.Key, g => g.ToList());
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var removed = new HashSet<SyncAction>();
+        var result = new List<SyncAction>(actions.Count);
+        foreach (var a in actions)
+        {
+            if (a.Kind == SyncActionKind.Copy && a.Size > 0 && bySize.TryGetValue(a.Size, out var candidates))
+            {
+                var name = a.Path[(a.Path.LastIndexOf('/') + 1)..];
+                var match = candidates
+                    .Where(c => !used.Contains(c.Path) && (c.Mtime - a.MtimeUtc).Duration() <= TimeTolerance)
+                    .OrderByDescending(c => c.Path.EndsWith("/" + name, StringComparison.OrdinalIgnoreCase)) // same name first
+                    .Select(c => ((string Path, long Size, DateTime Mtime, SyncAction? Delete)?)c)
+                    .FirstOrDefault();
+                if (match is { } m)
+                {
+                    used.Add(m.Path);
+                    if (m.Delete is not null)
+                        removed.Add(m.Delete);
+                    result.Add(new SyncAction(SyncActionKind.Move, a.Path, a.Size, m.Path, a.MtimeUtc));
+                    continue;
+                }
+            }
+            result.Add(a);
+        }
+        static int Phase(SyncActionKind k) => k switch
+        {
+            SyncActionKind.FixCase => 0,
+            SyncActionKind.CreateFolder => 1,
+            SyncActionKind.Move => 2,
+            SyncActionKind.Copy or SyncActionKind.Update => 3,
+            _ => 4,
+        };
+        return result.Where(a => !removed.Contains(a)).Select((a, i) => (a, i)).OrderBy(x => Phase(x.a.Kind)).ThenBy(x => x.i).Select(x => x.a).ToList();
     }
 
     /// <summary>Removes duplicates and folders already covered by a parent in the list.</summary>
@@ -81,7 +142,7 @@ public static class SyncPlanner
             if (info is DirectoryInfo dir)
             {
                 if (other is FileInfo)
-                    actions.Add(new SyncAction(SyncActionKind.Delete, childRel, ((FileInfo)other).Length));
+                    actions.Add(new SyncAction(SyncActionKind.Delete, childRel, ((FileInfo)other).Length, MtimeUtc: ((FileInfo)other).LastWriteTimeUtc));
                 // compare against the folder as it exists now (its case may still be fixed first)
                 var targetDir = other is DirectoryInfo ? other.FullName : Path.Combine(target, info.Name);
                 Compare(dir.FullName, targetDir, childRel, actions, skipped, ct);
@@ -91,15 +152,15 @@ public static class SyncPlanner
                 if (other is DirectoryInfo)
                 {
                     actions.Add(new SyncAction(SyncActionKind.DeleteFolder, childRel));
-                    actions.Add(new SyncAction(SyncActionKind.Copy, childRel, file.Length));
+                    actions.Add(new SyncAction(SyncActionKind.Copy, childRel, file.Length, MtimeUtc: file.LastWriteTimeUtc));
                 }
                 else if (other is FileInfo old)
                 {
                     if (old.Length != file.Length || (old.LastWriteTimeUtc - file.LastWriteTimeUtc).Duration() > TimeTolerance)
-                        actions.Add(new SyncAction(SyncActionKind.Update, childRel, file.Length));
+                        actions.Add(new SyncAction(SyncActionKind.Update, childRel, file.Length, MtimeUtc: file.LastWriteTimeUtc));
                 }
                 else
-                    actions.Add(new SyncAction(SyncActionKind.Copy, childRel, file.Length));
+                    actions.Add(new SyncAction(SyncActionKind.Copy, childRel, file.Length, MtimeUtc: file.LastWriteTimeUtc));
             }
         }
 
@@ -110,7 +171,7 @@ public static class SyncPlanner
                 continue;
             actions.Add(info is DirectoryInfo
                 ? new SyncAction(SyncActionKind.DeleteFolder, $"{rel}/{info.Name}")
-                : new SyncAction(SyncActionKind.Delete, $"{rel}/{info.Name}", ((FileInfo)info).Length));
+                : new SyncAction(SyncActionKind.Delete, $"{rel}/{info.Name}", ((FileInfo)info).Length, MtimeUtc: ((FileInfo)info).LastWriteTimeUtc));
         }
     }
 }

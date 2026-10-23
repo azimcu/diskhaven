@@ -11,6 +11,5 @@
 
 ## Known gaps / next improvements
 
-- Sync detects a renamed or moved folder as delete + copy (data is copied again). Move detection is planned.
 - USB power-on after power-off depends on the USB enclosure; to be tested with the real disks.
-- Disk health (SMART) is read by the agent; UI display pending.
+- Move detection matches files by size and modification time and checks the content (SHA-256) before moving; a file that was both moved and edited is copied again.
