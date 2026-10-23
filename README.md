@@ -49,6 +49,17 @@ Photos are intentionally out of scope: HomeVault is designed to run next to
 | `dev/` | Development helpers: dummy data, simulated USB disks |
 | `docs/` | Architecture and roadmap |
 
+## Install (Ubuntu Server 24.04)
+
+```bash
+git clone <this repository> homevault && cd homevault
+sudo deploy/install.sh        # Docker, disk agent, HomeVault container; safe to re-run
+```
+
+Open `http://<server>:8095` and create the admin account with the setup code from
+`/srv/homevault/config/setup-token.txt`. `sudo deploy/uninstall.sh` removes HomeVault
+but keeps your data and settings.
+
 ## Development
 
 Requirements: .NET 10 SDK, Linux.

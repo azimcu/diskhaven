@@ -11,3 +11,4 @@ dist/
 .env
 appsettings.*.local.json
 web/node_modules/
+deploy/.env
