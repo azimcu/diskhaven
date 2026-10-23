@@ -1,4 +1,4 @@
-import type { AuthState, FileEntry, Listing, TrashItem } from './types'
+import type { AfterSync, AuthState, Disk, FileEntry, Listing, SyncJob, SyncPlanResult, SyncReport, SyncSchedule, TrashItem } from './types'
 import { translateServerMessage } from './strings'
 
 export class ApiError extends Error {
@@ -62,6 +62,19 @@ export const api = {
   commitUpload: (id: string, destination: string, relativeName: string, sha256: string, lastModified: number) =>
     request<{ path: string; sha256: string; size: number }>('POST', `/api/uploads/${id}/commit`,
       { destination, relativeName, sha256, lastModified }),
+
+  disks: () => request<{ agent: boolean; disks: Disk[]; job: SyncJob | null }>('GET', '/api/disks'),
+  diskAction: (id: string, action: 'mount' | 'unmount' | 'standby' | 'power-off' | 'power-on') =>
+    request<void>('POST', `/api/disks/${encodeURIComponent(id)}/${action}`),
+  adoptDisk: (id: string, name: string) => request<unknown>('POST', `/api/disks/${encodeURIComponent(id)}/adopt`, { name }),
+  forgetDisk: (id: string) => request<void>('DELETE', `/api/disks/${encodeURIComponent(id)}`),
+  updateDisk: (id: string, patch: { name?: string; folders?: string[]; schedule?: SyncSchedule; after?: AfterSync }) =>
+    request<unknown>('PUT', `/api/disks/${encodeURIComponent(id)}`, patch),
+  planSync: (id: string) => request<SyncPlanResult>('POST', `/api/disks/${encodeURIComponent(id)}/plan`),
+  startSync: (id: string) => request<SyncJob>('POST', `/api/disks/${encodeURIComponent(id)}/sync`),
+  syncJob: () => request<SyncJob | null>('GET', '/api/sync/job'),
+  cancelSync: () => request<void>('POST', '/api/sync/job/cancel'),
+  syncHistory: (id: string) => request<SyncReport[]>('GET', `/api/disks/${encodeURIComponent(id)}/history`),
 
   contentUrl: (path: string, download = false) => `/api/files/content?path=${q(path)}${download ? '&download=true' : ''}`,
 }

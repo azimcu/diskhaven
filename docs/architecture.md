@@ -37,7 +37,7 @@
 4. Match → `fsync`, then atomic rename to the destination. No partial files ever
    appear in the user's folders.
 
-## External disk sync (planned)
+## External disk sync
 
 - Each external disk carries `.homevault-disk.json` (disk id, name) so it is
   recognised on any USB port.
@@ -48,6 +48,15 @@
 - Detach = unmount + `udisksctl power-off` (spins the disk down); attach =
   USB re-authorise. Idle disks are put to standby with `hdparm`. Per-port power
   cut needs a hub that supports it (uhubctl) and is optional.
+
+## Disk agent
+
+`agent/homevault-diskd.py` is the only component running as root. It accepts a fixed set
+of JSON operations over a Unix socket (`list`, `mount`, `unmount`, `standby`, `powerOff`,
+`powerOn`, `smart`), addresses disks only by filesystem UUID, refuses any disk holding a
+system mount and never formats. The container gets the socket and the mount folder
+(`rslave` bind propagation) and nothing else from the host. For development the agent can
+be limited to loop devices backed by images in one folder (`usb: false`, `virtualDir`).
 
 ## Single-disk integrity
 

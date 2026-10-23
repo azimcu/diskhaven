@@ -10,9 +10,20 @@ services:
     restart: unless-stopped
     ports:
       - "8095:8080"
+    environment:
+      TZ: Europe/Istanbul
+      HomeVault__AgentSocket: /run/homevault/diskd.sock
+      HomeVault__DisksPath: /disks
     volumes:
       - /mnt/immich/homevault-dev/data:/data
       - /mnt/immich/homevault-dev/config:/config
+      # disk agent socket (dev agent: virtual disks only) and the folder it mounts disks under
+      - /run/homevault-dev:/run/homevault
+      - type: bind
+        source: /srv/homevault-dev/disks
+        target: /disks
+        bind:
+          propagation: rslave
     mem_limit: 768m
     cpus: 1.5
     security_opt:

@@ -19,11 +19,16 @@ const serverMessages: Record<string, string> = {
   'Not enough free space on the disk.': 'Diskte yeterli boş alan yok.',
   'Upload is not complete.': 'Yükleme tamamlanmadı.',
   network: 'Sunucuya ulaşılamıyor. Bağlantını kontrol et.',
+  'Disk is not adopted.': 'Bu disk henüz HomeVault yedek diski yapılmamış.',
+  'No folders are assigned to this disk.': 'Bu diske henüz klasör atanmamış.',
+  'A sync is already running.': 'Şu an başka bir eşitleme sürüyor.',
+  'Invalid time.': 'Saat geçersiz.',
 }
 
 export function translateServerMessage(message: string, status?: number): string {
   if (serverMessages[message]) return serverMessages[message]
   if (message.endsWith(' already exists.')) return `${message.slice(0, -' already exists.'.length)} zaten var.`
+  if (message.startsWith('Folder not found: ')) return `Klasör bulunamadı: ${message.slice(18)}`
   if (message.startsWith('User name:')) return 'Kullanıcı adı 2-32 karakter olmalı; harf, rakam, . _ - kullanılabilir.'
   if (status === 429) return 'Çok fazla deneme yapıldı. Bir dakika bekleyip tekrar dene.'
   if (status === 422) return 'Dosya doğrulanamadı (bozuk aktarım). Tekrar yükleniyor.'
@@ -34,6 +39,7 @@ export const t = {
   appName: 'HomeVault',
   thisNas: 'Bu NAS',
   trash: 'Çöp Kutusu',
+  disks: 'Diskler',
   newFolder: 'Yeni klasör',
   upload: 'Yükle',
   uploadFiles: 'Dosya yükle',
