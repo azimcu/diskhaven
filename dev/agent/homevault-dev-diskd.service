@@ -1,0 +1,12 @@
+[Unit]
+Description=HomeVault DEV (virtual disks only) disk agent (mount, spin-down and power control for HomeVault disks)
+After=local-fs.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/homevault-dev/homevault-diskd.py /etc/homevault-dev/diskd.json
+Restart=on-failure
+NoNewPrivileges=true
+# no mount namespacing (ProtectSystem, PrivateTmp...): mounts must be visible to the host and the container
+
+[Install]
+WantedBy=multi-user.target
