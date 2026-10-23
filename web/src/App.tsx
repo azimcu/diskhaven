@@ -7,16 +7,18 @@ import { Login } from './Login'
 import { t } from './strings'
 import { Transfers } from './Transfers'
 import { TrashView } from './TrashView'
+import { DisksView } from './DisksView'
 import { Tree } from './Tree'
 import type { AuthState } from './types'
 import { filesFromDrop, uploads } from './uploads'
 
 // Location lives in the URL hash (#/files/Belgeler/Okul, #/trash) so browser back/forward and reload work.
-type Route = { view: 'files'; path: string } | { view: 'trash' }
+type Route = { view: 'files'; path: string } | { view: 'trash' } | { view: 'disks' }
 
 function parseHash(): Route {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''))
   if (h === 'trash') return { view: 'trash' }
+  if (h === 'disks') return { view: 'disks' }
   return { view: 'files', path: h.startsWith('files') ? h.slice(5).replace(/^\/+|\/+$/g, '') : '' }
 }
 
@@ -107,14 +109,15 @@ export function App() {
       </header>
       <div className="body">
         <div className={`side ${drawer ? 'open' : ''}`}>
-          <Tree current={route.view === 'files' ? route.path : null} version={version} onOpen={navigate}
-            onOpenTrash={() => { location.hash = '#/trash' }} onDropItems={onDropItems} />
+          <Tree current={route.view === 'files' ? route.path : null} special={route.view === 'files' ? null : route.view}
+            version={version} onOpen={navigate} onOpenTrash={() => { location.hash = '#/trash' }}
+            onOpenDisks={() => { location.hash = '#/disks' }} onDropItems={onDropItems} />
         </div>
         {drawer && <div className="side-backdrop" onClick={() => setDrawer(false)} />}
         {route.view === 'files'
           ? <Explorer path={route.path} version={version} clipboard={clipboard} setClipboard={setClipboard}
               navigate={navigate} changed={changed} onDropItems={onDropItems} storage={storage} />
-          : <TrashView onChanged={changed} />}
+          : route.view === 'trash' ? <TrashView onChanged={changed} /> : <DisksView onChanged={changed} />}
       </div>
       <Transfers />
       <Toasts />

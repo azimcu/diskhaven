@@ -1,8 +1,10 @@
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using HomeVault.Api;
+using HomeVault.Api.Disks;
 using HomeVault.Core.Accounts;
 using HomeVault.Core.Storage;
+using HomeVault.Core.Sync;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.StaticFiles;
@@ -35,9 +37,15 @@ builder.Services.AddSingleton(new AccountStore(configDir));
 builder.Services.AddSingleton(tusStore);
 builder.Services.AddHostedService<Housekeeping>();
 builder.Services.AddHostedService<FolderSizeScanner>();
+builder.Services.AddSingleton<DiskAgentClient>();
+builder.Services.AddSingleton(new DiskSettingsStore(configDir));
+builder.Services.AddSingleton<DiskService>();
+builder.Services.AddSingleton<SyncJobRunner>();
+builder.Services.AddHostedService<SyncScheduler>();
 builder.Services.AddProblemDetails();
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
+builder.Services.Configure<HostOptions>(o => o.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
 
 // Upload chunks are 16 MB; leave headroom.
 builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = 64L * 1024 * 1024);
@@ -192,6 +200,61 @@ trash.MapDelete("/", (FileOperations ops) =>
     return Results.NoContent();
 });
 
+// ---- disks and sync -------------------------------------------------------------------
+var disksApi = app.MapGroup("/api/disks").RequireAuthorization();
+
+disksApi.MapGet("/", async (DiskAgentClient agent, DiskService disks, SyncJobRunner runner, CancellationToken ct) =>
+    !agent.Available
+        ? Results.Ok(new { agent = false, disks = Array.Empty<DiskView>(), job = runner.Current })
+        : await GuardAsync(async () => Results.Ok(new { agent = true, disks = await disks.ListAsync(ct), job = runner.Current })));
+
+disksApi.MapPost("/{id}/mount", (string id, DiskService disks, CancellationToken ct) =>
+    GuardAsync(async () => { await disks.EnsureMountedAsync(id, ct); return Results.NoContent(); }));
+disksApi.MapPost("/{id}/unmount", (string id, DiskAgentClient agent, CancellationToken ct) =>
+    GuardAsync(async () => { await agent.UnmountAsync(id, ct); return Results.NoContent(); }));
+disksApi.MapPost("/{id}/standby", (string id, DiskAgentClient agent, CancellationToken ct) =>
+    GuardAsync(async () => { await agent.UnmountAsync(id, ct); await agent.StandbyAsync(id, ct); return Results.NoContent(); }));
+disksApi.MapPost("/{id}/power-off", (string id, DiskAgentClient agent, SyncJobRunner runner, CancellationToken ct) =>
+    GuardAsync(async () =>
+    {
+        if (runner.Current is { Status: JobStatus.Running } j && j.FsId == id)
+            throw new VaultConflictException("A sync is already running.");
+        await agent.PowerOffAsync(id, ct);
+        return Results.NoContent();
+    }));
+disksApi.MapPost("/{id}/power-on", (string id, DiskService disks, CancellationToken ct) =>
+    GuardAsync(async () => { await disks.EnsureMountedAsync(id, ct); return Results.NoContent(); }));
+disksApi.MapGet("/{id}/smart", (string id, DiskAgentClient agent, CancellationToken ct) =>
+    GuardAsync(async () => Results.Ok(await agent.SmartAsync(id, ct))));
+
+disksApi.MapPost("/{id}/adopt", (string id, AdoptRequest req, DiskService disks, CancellationToken ct) =>
+    GuardAsync(async () => Results.Ok(await disks.AdoptAsync(id, req.Name, ct))));
+disksApi.MapDelete("/{id}", (string id, DiskSettingsStore store) => { store.Remove(id); return Results.NoContent(); });
+disksApi.MapPut("/{id}", (string id, DiskSettingsRequest req, DiskService disks) =>
+    Guard(() => Results.Ok(disks.UpdateSettings(id, req.Name, req.Folders, req.Schedule, req.After))));
+disksApi.MapGet("/{id}/history", (string id, DiskSettingsStore store) => Results.Ok(store.History(id)));
+
+disksApi.MapPost("/{id}/plan", (string id, DiskService disks, DiskSettingsStore store, VaultRoot vault, CancellationToken ct) =>
+    GuardAsync(async () =>
+    {
+        var s = store.Get(id) ?? throw new VaultConflictException("Disk is not adopted.");
+        var root = await disks.EnsureMountedAsync(id, ct);
+        var plan = await Task.Run(() => SyncPlanner.Plan(vault.FullPath, s.Folders, root, ct), ct);
+        var drive = new DriveInfo(root);
+        return Results.Ok(new
+        {
+            summary = SyncJobRunner.Summarize(plan),
+            free = drive.AvailableFreeSpace,
+            total = drive.TotalSize,
+            actions = plan.Actions.Where(a => a.Kind != SyncActionKind.CreateFolder).Take(200),
+            skipped = plan.Skipped.Take(50),
+        });
+    }));
+disksApi.MapPost("/{id}/sync", (string id, SyncJobRunner runner) => Guard(() => Results.Ok(runner.Start(id))));
+
+app.MapGet("/api/sync/job", (SyncJobRunner runner) => Results.Ok(runner.Current)).RequireAuthorization();
+app.MapPost("/api/sync/job/cancel", (SyncJobRunner runner) => { runner.Cancel(); return Results.NoContent(); }).RequireAuthorization();
+
 // ---- uploads: tus protocol for resumable chunks, then a verified commit ----------------
 app.MapTus("/api/tus", _ => Task.FromResult(new DefaultTusConfiguration
 {
@@ -260,6 +323,16 @@ static Task SignIn(HttpContext ctx, Account account) =>
         CookieAuthenticationDefaults.AuthenticationScheme)),
         new AuthenticationProperties { IsPersistent = true });
 
+static async Task<IResult> GuardAsync(Func<Task<IResult>> action)
+{
+    try { return await action(); }
+    catch (DiskAgentException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
+    catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status400BadRequest); }
+    catch (VaultConflictException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
+    catch (KeyNotFoundException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status404NotFound); }
+    catch (IOException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
+}
+
 static IResult Guard(Func<IResult> action)
 {
     try { return action(); }
@@ -268,6 +341,7 @@ static IResult Guard(Func<IResult> action)
     catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
     { return Results.Problem(e.Message, statusCode: StatusCodes.Status404NotFound); }
     catch (IOException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
+    catch (KeyNotFoundException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status404NotFound); }
 }
 
 record SetupRequest(string Token, string UserName, string Password);
@@ -277,6 +351,8 @@ record FolderRequest(string? Parent, string Name);
 record RenameRequest(string Path, string NewName);
 record TransferRequest(string[] Paths, string? Destination);
 record DeleteRequest(string[] Paths);
+record AdoptRequest(string Name);
+record DiskSettingsRequest(string? Name, string[]? Folders, SyncSchedule? Schedule, AfterSync? After);
 record CommitRequest(string? Destination, string RelativeName, string Sha256, long? LastModified);
 
 public partial class Program;

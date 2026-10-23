@@ -1,19 +1,21 @@
 import { useEffect, useState } from 'react'
-import { ChevronRight, HardDrive, Trash2 } from 'lucide-react'
+import { ChevronRight, HardDrive, Trash2, Usb } from 'lucide-react'
 import { api, folderEntries } from './api'
 import { FileIcon } from './FileIcon'
 import { t } from './strings'
 
 interface Props {
-  current: string | null // null = recycle bin is open
+  current: string | null // null = a special page is open
+  special: 'trash' | 'disks' | null
   version: number
   onOpen: (path: string) => void
   onOpenTrash: () => void
+  onOpenDisks: () => void
   onDropItems: (dest: string, e: React.DragEvent) => void
 }
 
 /** Left navigation pane: folder tree of the NAS (loaded lazily) and the recycle bin. */
-export function Tree({ current, version, onOpen, onOpenTrash, onDropItems }: Props) {
+export function Tree({ current, special, version, onOpen, onOpenTrash, onOpenDisks, onDropItems }: Props) {
   // expand the path to the current folder automatically
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']))
   useEffect(() => {
@@ -39,7 +41,10 @@ export function Tree({ current, version, onOpen, onOpenTrash, onDropItems }: Pro
     <nav className="tree" aria-label="Klasörler">
       <TreeNode path="" name={t.thisNas} depth={0} root {...{ current, expanded, toggle, onOpen, version, onDropItems }} />
       <div className="tree-sep" />
-      <button className={`tree-row ${current == null ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={onOpenTrash}>
+      <button className={`tree-row ${special === 'disks' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={onOpenDisks}>
+        <Usb size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.disks}</span>
+      </button>
+      <button className={`tree-row ${special === 'trash' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={onOpenTrash}>
         <Trash2 size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.trash}</span>
       </button>
     </nav>
