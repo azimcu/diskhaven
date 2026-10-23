@@ -7,7 +7,7 @@ namespace HomeVault.Core.Storage;
 /// copies are written to a temporary file first and renamed into place, deletes go to the
 /// recycle bin (<c>.homevault/trash</c>) instead of being removed.
 /// </summary>
-public sealed class FileOperations(VaultRoot root, TimeProvider clock)
+public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultChangeListener? listener = null)
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
@@ -23,6 +23,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock)
         if (FileNames.Exists(dir, name))
             throw new VaultConflictException($"'{name}' already exists.");
         Directory.CreateDirectory(Path.Combine(dir, name));
+        listener?.Added(Path.Combine(dir, name));
         return Root.ToRelative(Path.Combine(dir, name));
     }
 
@@ -35,7 +36,9 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock)
         var caseOnly = Path.GetFileName(full).Equals(newName, StringComparison.OrdinalIgnoreCase);
         if (!caseOnly && FileNames.Exists(parent, newName))
             throw new VaultConflictException($"'{newName}' already exists.");
+        listener?.Removing(full);
         MoveEntry(full, target);
+        listener?.Added(target);
         return Root.ToRelative(target);
     }
 
@@ -54,7 +57,9 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock)
             }
             EnsureNotInside(full, dest);
             var target = Path.Combine(dest, FileNames.Unique(dest, Path.GetFileName(full)));
+            listener?.Removing(full);
             MoveEntry(full, target);
+            listener?.Added(target);
             result.Add(Root.ToRelative(target));
         }
         return result;
@@ -79,6 +84,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock)
                 CopyDirectory(full, target);
             else
                 CopyFile(full, target);
+            listener?.Added(target);
             result.Add(Root.ToRelative(target));
         }
         return result;
@@ -100,6 +106,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock)
                 isDir ? DirectorySize(full) : new FileInfo(full).Length,
                 clock.GetUtcNow());
             File.WriteAllText(Path.Combine(slot, "info.json"), JsonSerializer.Serialize(item, Json));
+            listener?.Removing(full);
             MoveEntry(full, Path.Combine(slot, "item"));
             items.Add(item);
         }
@@ -122,9 +129,14 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock)
     {
         var (slot, item) = TrashSlot(id);
         var originalParent = Root.Resolve(Path.GetDirectoryName(item.OriginalPath)?.Replace('\\', '/'));
+        // remember the highest folder that has to be recreated, so folder sizes count it
+        string? createdTop = null;
+        for (var d = originalParent; d.Length > Root.FullPath.Length && !Directory.Exists(d); d = Path.GetDirectoryName(d)!)
+            createdTop = d;
         Directory.CreateDirectory(originalParent);
         var target = Path.Combine(originalParent, FileNames.Unique(originalParent, item.Name));
         MoveEntry(Path.Combine(slot, "item"), target);
+        listener?.Added(createdTop ?? target);
         Directory.Delete(slot, recursive: true);
         return Root.ToRelative(target);
     }

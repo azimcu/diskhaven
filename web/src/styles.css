@@ -289,3 +289,5 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
   .c-more .icon-btn { display: inline-grid; }
   .tree-row { height: 40px; }
 }
+
+.calc { font-style: italic; opacity: .7; }

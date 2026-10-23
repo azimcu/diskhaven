@@ -1,7 +1,7 @@
 namespace HomeVault.Core.Storage;
 
 /// <summary>Read-only access to folders and files of a vault.</summary>
-public sealed class FileBrowser(VaultRoot root)
+public sealed class FileBrowser(VaultRoot root, FolderSizeIndex? sizes = null)
 {
     public VaultRoot Root { get; } = root;
 
@@ -39,14 +39,18 @@ public sealed class FileBrowser(VaultRoot root)
     private FileEntry ToEntry(FileSystemInfo info)
     {
         var isDir = info is DirectoryInfo;
+        var rel = Root.ToRelative(info.FullName);
+        var stats = isDir ? sizes?.Get(rel) : null;
         return new FileEntry(
             info.Name,
-            Root.ToRelative(info.FullName),
+            rel,
             isDir ? EntryKind.Folder : EntryKind.File,
-            isDir ? null : ((FileInfo)info).Length,
+            isDir ? stats?.Size : ((FileInfo)info).Length,
             info.LastWriteTimeUtc,
             isDir ? null : NullIfEmpty(info.Extension.TrimStart('.').ToLowerInvariant()),
-            info.Name.StartsWith('.') || info.Attributes.HasFlag(FileAttributes.Hidden));
+            info.Name.StartsWith('.') || info.Attributes.HasFlag(FileAttributes.Hidden),
+            stats?.Files,
+            stats?.Folders);
     }
 
     private static string? NullIfEmpty(string s) => s.Length == 0 ? null : s;
