@@ -7,7 +7,7 @@ namespace HomeVault.Core.Storage;
 /// before sending, then moves it into the user's folder in one rename. A file that does not
 /// match is never placed in the vault, so a broken transfer cannot leave a corrupt file behind.
 /// </summary>
-public sealed class UploadCommitter(VaultRoot root)
+public sealed class UploadCommitter(VaultRoot root, IVaultChangeListener? listener = null)
 {
     public sealed record Result(string Path, string Sha256, long Size);
 
@@ -32,12 +32,15 @@ public sealed class UploadCommitter(VaultRoot root)
         var folder = root.Resolve(VaultRoot.Normalize(destination));
         if (!Directory.Exists(folder))
             throw new DirectoryNotFoundException("Destination folder not found.");
+        string? createdTop = null;
         foreach (var dir in parts[..^1])
         {
             // reuse an existing folder with the same name in any letter case (NTFS / exFAT semantics)
             var existing = Directory.Exists(folder)
                 ? Directory.EnumerateDirectories(folder).FirstOrDefault(d => Path.GetFileName(d).Equals(dir, StringComparison.OrdinalIgnoreCase))
                 : null;
+            if (existing is null)
+                createdTop ??= Path.Combine(folder, dir);
             folder = existing ?? Directory.CreateDirectory(Path.Combine(folder, dir)).FullName;
             root.Resolve(root.ToRelative(folder)); // re-check: no symlink on the way
         }
@@ -49,6 +52,7 @@ public sealed class UploadCommitter(VaultRoot root)
             File.SetLastWriteTimeUtc(receivedFile, mtime.UtcDateTime);
         var target = Path.Combine(folder, FileNames.Unique(folder, parts[^1]));
         File.Move(receivedFile, target);
+        listener?.Added(createdTop ?? target);
         return new Result(root.ToRelative(target), actual, new FileInfo(target).Length);
     }
 

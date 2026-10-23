@@ -8,6 +8,9 @@ export interface FileEntry {
   modified: string
   extension: string | null
   hidden: boolean
+  /** folders only: recursive totals, null while being calculated */
+  files?: number | null
+  folders?: number | null
 }
 
 export interface Listing {

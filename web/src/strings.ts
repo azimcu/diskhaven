@@ -61,6 +61,10 @@ export const t = {
   colOriginal: 'Özgün konum',
   colDeleted: 'Silinme tarihi',
   folderType: 'Dosya klasörü',
+  contents: (files: number, folders: number) =>
+    `${files.toLocaleString('tr-TR')} dosya, ${folders.toLocaleString('tr-TR')} klasör`,
+  calculating: 'hesaplanıyor…',
+  colContents: 'İçerik',
   fileType: (ext: string | null) => (ext ? `${ext.toUpperCase()} Dosyası` : 'Dosya'),
   items: (n: number) => `${n.toLocaleString('tr-TR')} öğe`,
   selected: (n: number) => `${n.toLocaleString('tr-TR')} öğe seçili`,

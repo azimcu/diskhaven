@@ -40,7 +40,20 @@ export function PreviewBody({ entry }: { entry: FileEntry }) {
 }
 
 export function PreviewPane({ entry, count }: { entry: FileEntry | null; count: number }) {
-  if (!entry || entry.kind === 'Folder')
+  if (entry?.kind === 'Folder')
+    return (
+      <aside className="preview-pane">
+        <div className="pv-body"><div className="pv-none"><FileIcon entry={entry} size={64} /></div></div>
+        <h3 className="pv-name">{entry.name}</h3>
+        <dl className="pv-meta">
+          <dt>{t.colType}</dt><dd>{typeName(entry)}</dd>
+          <dt>{t.colSize}</dt><dd>{entry.size == null ? t.calculating : formatSize(entry.size)}</dd>
+          {entry.files != null && <><dt>{t.colContents}</dt><dd>{t.contents(entry.files, entry.folders ?? 0)}</dd></>}
+          <dt>{t.colModified}</dt><dd>{formatDate(entry.modified)}</dd>
+        </dl>
+      </aside>
+    )
+  if (!entry)
     return <aside className="preview-pane empty"><p>{count > 1 ? t.selected(count) : t.selectToPreview}</p></aside>
   return (
     <aside className="preview-pane">

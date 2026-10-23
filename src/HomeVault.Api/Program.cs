@@ -26,12 +26,15 @@ var tusStore = new TusDiskStore(uploadDir);
 
 builder.Services.AddSingleton(root);
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<FolderSizeIndex>();
+builder.Services.AddSingleton<IVaultChangeListener>(sp => sp.GetRequiredService<FolderSizeIndex>());
 builder.Services.AddSingleton<FileBrowser>();
 builder.Services.AddSingleton<FileOperations>();
 builder.Services.AddSingleton<UploadCommitter>();
 builder.Services.AddSingleton(new AccountStore(configDir));
 builder.Services.AddSingleton(tusStore);
 builder.Services.AddHostedService<Housekeeping>();
+builder.Services.AddHostedService<FolderSizeScanner>();
 builder.Services.AddProblemDetails();
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));

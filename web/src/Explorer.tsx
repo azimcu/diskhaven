@@ -442,7 +442,9 @@ function Row(p: RowProps) {
       </td>
       <td className="c-date">{formatDate(e.modified)}</td>
       <td className="c-type">{typeName(e)}</td>
-      <td className="c-size">{folder ? '' : formatSize(e.size)}</td>
+      <td className="c-size" title={folder && e.files != null ? t.contents(e.files, e.folders ?? 0) : undefined}>
+        {folder && e.size == null ? <span className="calc">{t.calculating}</span> : formatSize(e.size)}
+      </td>
       <td className="c-more"><button className="icon-btn" onClick={p.onMore} aria-label="Diğer"><MoreVertical size={16} /></button></td>
     </tr>
   )
