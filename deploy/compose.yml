@@ -1,0 +1,31 @@
+# Production instance. Created and updated by deploy/install.sh (values come from deploy/.env).
+name: homevault
+services:
+  homevault:
+    build: ..
+    image: homevault:latest
+    container_name: homevault
+    user: "${HV_UID}:${HV_GID}"
+    restart: unless-stopped
+    ports:
+      - "${HV_PORT:-8095}:8080"
+    environment:
+      TZ: Europe/Istanbul
+      HomeVault__AgentSocket: /run/homevault/diskd.sock
+      HomeVault__DisksPath: /disks
+    volumes:
+      - ${HV_DATA}:/data
+      - ${HV_CONFIG}:/config
+      - /run/homevault:/run/homevault
+      - type: bind
+        source: /srv/homevault/disks
+        target: /disks
+        bind:
+          propagation: rslave
+    mem_limit: 1536m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
