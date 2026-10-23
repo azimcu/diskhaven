@@ -28,7 +28,7 @@ public sealed class SyncExecutor(TimeProvider clock)
         Directory.CreateDirectory(temp);
 
         var errors = new List<SyncError>();
-        int created = 0, copied = 0, updated = 0, deleted = 0, verified = 0, done = 0;
+        int created = 0, copied = 0, updated = 0, deleted = 0, verified = 0, moved = 0, done = 0;
         long bytesDone = 0, bytesTotal = plan.BytesToCopy;
         var total = plan.Actions.Count;
         var canceled = false;
@@ -56,6 +56,24 @@ public sealed class SyncExecutor(TimeProvider clock)
                         if (Directory.Exists(target)) { Directory.Move(target, step); Directory.Move(step, fixedPath); }
                         else { File.Move(target, step); File.Move(step, fixedPath); }
                         break;
+                    case SyncActionKind.Move:
+                        var from = Combine(targetRoot, action.TargetPath!);
+                        if (await SameContentAsync(Combine(sourceRoot, action.Path), from, ct))
+                        {
+                            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                            File.Move(from, target);
+                            moved++;
+                        }
+                        else
+                        {
+                            // not the same file after all: normal verified copy, old file to the disk trash
+                            await CopyVerifiedAsync(Combine(sourceRoot, action.Path), target, temp, trash, action.Path, b => { bytesDone += b; Report("copy", action.Path); }, ct);
+                            MoveToTrash(from, trash, action.TargetPath!);
+                            copied++;
+                            deleted++;
+                            verified++;
+                        }
+                        break;
                     case SyncActionKind.Copy:
                     case SyncActionKind.Update:
                         var source = Combine(sourceRoot, action.Path);
@@ -65,7 +83,9 @@ public sealed class SyncExecutor(TimeProvider clock)
                         break;
                     case SyncActionKind.Delete:
                     case SyncActionKind.DeleteFolder:
-                        if (File.Exists(target) || Directory.Exists(target))
+                        if (Directory.Exists(target) && !Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories).Any())
+                            Directory.Delete(target, recursive: true); // only empty folders left (e.g. after moves): nothing worth keeping
+                        else if (File.Exists(target) || Directory.Exists(target))
                         {
                             MoveToTrash(target, trash, action.Path);
                             deleted++;
@@ -85,7 +105,7 @@ public sealed class SyncExecutor(TimeProvider clock)
         TryDelete(temp);
         PurgeTrash(targetRoot, clock.GetUtcNow());
         return new SyncReport(started, clock.GetUtcNow(), created, copied, updated, deleted, verified, bytesDone,
-            errors, plan.Skipped, canceled);
+            errors, plan.Skipped, canceled, moved);
     }
 
     /// <summary>Copies source to target through a temporary file and verifies the copy on disk.</summary>
@@ -135,6 +155,17 @@ public sealed class SyncExecutor(TimeProvider clock)
             if (File.Exists(temp))
                 File.Delete(temp);
         }
+    }
+
+    private static async Task<bool> SameContentAsync(string a, string b, CancellationToken ct)
+    {
+        if (!File.Exists(a) || !File.Exists(b) || new FileInfo(a).Length != new FileInfo(b).Length)
+            return false;
+        await using var fa = new FileStream(a, FileMode.Open, FileAccess.Read, FileShare.Read, Buffer, useAsync: true);
+        await using var fb = new FileStream(b, FileMode.Open, FileAccess.Read, FileShare.Read, Buffer, useAsync: true);
+        var ha = await SHA256.HashDataAsync(fa, ct);
+        var hb = await SHA256.HashDataAsync(fb, ct);
+        return CryptographicOperations.FixedTimeEquals(ha, hb);
     }
 
     private static void MoveToTrash(string target, string trash, string rel)

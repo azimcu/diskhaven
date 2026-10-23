@@ -10,7 +10,7 @@ public sealed record SyncJob(
     JobStatus Status, string Phase, SyncProgress? Progress, SyncReport? Report, string? Error,
     SyncPlanSummary? Plan);
 
-public sealed record SyncPlanSummary(int CreateFolders, int Copy, int Update, int Delete, long Bytes, int Skipped);
+public sealed record SyncPlanSummary(int CreateFolders, int Copy, int Update, int Delete, long Bytes, int Skipped, int Move = 0);
 
 /// <summary>Runs one sync at a time in the background and keeps its live state for the UI.</summary>
 public sealed class SyncJobRunner(DiskService disks, DiskSettingsStore settings, VaultRoot vault, TimeProvider clock,
@@ -24,7 +24,8 @@ public sealed class SyncJobRunner(DiskService disks, DiskSettingsStore settings,
 
     public static SyncPlanSummary Summarize(SyncPlan p) => new(
         p.Count(SyncActionKind.CreateFolder), p.Count(SyncActionKind.Copy), p.Count(SyncActionKind.Update),
-        p.Count(SyncActionKind.Delete) + p.Count(SyncActionKind.DeleteFolder), p.BytesToCopy, p.Skipped.Count);
+        p.Count(SyncActionKind.Delete) + p.Count(SyncActionKind.DeleteFolder), p.BytesToCopy, p.Skipped.Count,
+        p.Count(SyncActionKind.Move));
 
     public SyncJob Start(string fsId, bool scheduled = false)
     {

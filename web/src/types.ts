@@ -49,9 +49,9 @@ export interface Disk {
 }
 
 export interface SyncProgress { phase: string; filesDone: number; filesTotal: number; bytesDone: number; bytesTotal: number; current: string | null }
-export interface SyncPlanSummary { createFolders: number; copy: number; update: number; delete: number; bytes: number; skipped: number }
+export interface SyncPlanSummary { createFolders: number; copy: number; update: number; delete: number; bytes: number; skipped: number; move: number }
 export interface SyncReport {
-  started: string; finished: string; created: number; copied: number; updated: number; deleted: number; verified: number
+  started: string; finished: string; created: number; copied: number; updated: number; deleted: number; verified: number; moved: number
   bytesCopied: number; errors: { path: string; message: string }[]; skipped: string[]; canceled: boolean; success: boolean
 }
 export interface SyncJob {
@@ -61,5 +61,10 @@ export interface SyncJob {
 }
 export interface SyncPlanResult {
   summary: SyncPlanSummary; free: number; total: number
-  actions: { kind: string; path: string; size: number }[]; skipped: string[]
+  actions: { kind: string; path: string; size: number; targetPath: string | null }[]; skipped: string[]
+}
+
+export interface SmartInfo {
+  available: boolean; passed?: boolean | null; temperature?: number | null; powerOnHours?: number | null
+  reallocated?: number | null; pending?: number | null; uncorrectable?: number | null
 }

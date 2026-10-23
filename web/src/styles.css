@@ -355,3 +355,6 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 .check-list label:hover { background: var(--hover); }
 .link-danger { color: var(--danger); }
 .history td { white-space: normal; height: auto; padding: 6px 10px; }
+
+.tag.Move { background: color-mix(in srgb, #8a3ffc 20%, transparent); }
+.health { margin: 12px 0; }

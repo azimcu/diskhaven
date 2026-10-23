@@ -155,3 +155,95 @@ public sealed class SyncTests : IDisposable
         public void Report(SyncProgress value) => on(value);
     }
 }
+
+public sealed class SyncMoveTests : IDisposable
+{
+    private readonly string _src = Directory.CreateTempSubdirectory("homevault-msrc-").FullName;
+    private readonly string _dst = Directory.CreateTempSubdirectory("homevault-mdst-").FullName;
+    private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2026, 10, 23, 12, 0, 0, TimeSpan.Zero));
+    private static readonly DateTime T0 = new(2025, 1, 1, 10, 0, 0, DateTimeKind.Utc);
+
+    public void Dispose() { Directory.Delete(_src, true); Directory.Delete(_dst, true); }
+
+    private void Write(string rel, string content, DateTime? mtime = null)
+    {
+        var p = Path.Combine(_src, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.WriteAllText(p, content);
+        File.SetLastWriteTimeUtc(p, mtime ?? T0);
+    }
+
+    private async Task<(SyncPlan, SyncReport)> Sync()
+    {
+        var plan = SyncPlanner.Plan(_src, ["D"], _dst);
+        return (plan, await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst));
+    }
+
+    [Fact]
+    public async Task Renamed_folder_is_moved_on_the_backup_without_copying_again()
+    {
+        Write("D/Eski/a.bin", "aaaa");
+        Write("D/Eski/Alt/b.bin", "bbbbbb", T0.AddDays(1));
+        await Sync();
+
+        Directory.Move(Path.Combine(_src, "D/Eski"), Path.Combine(_src, "D/Yeni"));
+        var (plan, report) = await Sync();
+
+        Assert.Equal(2, plan.Count(SyncActionKind.Move));
+        Assert.Equal(0, plan.Count(SyncActionKind.Copy));
+        Assert.Equal(0, plan.BytesToCopy);
+        Assert.Equal(2, report.Moved);
+        Assert.Equal(0, report.BytesCopied);
+        Assert.True(report.Success);
+        Assert.Equal("bbbbbb", File.ReadAllText(Path.Combine(_dst, "D/Yeni/Alt/b.bin")));
+        Assert.False(Directory.Exists(Path.Combine(_dst, "D/Eski")));
+        Assert.Empty(Directory.Exists(Path.Combine(_dst, SyncExecutor.TrashFolder))
+            ? Directory.GetFiles(Path.Combine(_dst, SyncExecutor.TrashFolder), "*", SearchOption.AllDirectories) : []);
+        Assert.True(SyncPlanner.Plan(_src, ["D"], _dst).IsEmpty);
+    }
+
+    [Fact]
+    public async Task File_moved_to_another_folder_is_moved_on_the_backup()
+    {
+        Write("D/A/foto.jpg", "içerik");
+        Directory.CreateDirectory(Path.Combine(_src, "D/B"));
+        await Sync();
+        File.Move(Path.Combine(_src, "D/A/foto.jpg"), Path.Combine(_src, "D/B/foto.jpg"));
+        var (plan, report) = await Sync();
+        Assert.Equal(1, plan.Count(SyncActionKind.Move));
+        Assert.Equal(1, report.Moved);
+        Assert.True(File.Exists(Path.Combine(_dst, "D/B/foto.jpg")));
+        Assert.False(File.Exists(Path.Combine(_dst, "D/A/foto.jpg")));
+    }
+
+    [Fact]
+    public async Task Same_size_and_time_but_different_content_falls_back_to_copy_and_keeps_old_in_trash()
+    {
+        Write("D/eski.txt", "AAAA");
+        await Sync();
+        File.Delete(Path.Combine(_src, "D/eski.txt"));
+        Write("D/yeni.txt", "BBBB"); // same size and time, other content: looks like a move
+        var plan = SyncPlanner.Plan(_src, ["D"], _dst);
+        Assert.Equal(1, plan.Count(SyncActionKind.Move));
+        var report = await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst);
+
+        Assert.Equal(0, report.Moved);
+        Assert.Equal("BBBB", File.ReadAllText(Path.Combine(_dst, "D/yeni.txt")));
+        Assert.False(File.Exists(Path.Combine(_dst, "D/eski.txt")));
+        var trashed = Directory.GetFiles(Path.Combine(_dst, SyncExecutor.TrashFolder), "*", SearchOption.AllDirectories);
+        Assert.Equal("AAAA", File.ReadAllText(Assert.Single(trashed)));
+    }
+
+    [Fact]
+    public async Task Copies_of_new_files_with_unrelated_deletes_stay_copies()
+    {
+        Write("D/silinecek.txt", "12345");
+        await Sync();
+        File.Delete(Path.Combine(_src, "D/silinecek.txt"));
+        Write("D/yeni.txt", "1234567890");
+        var (plan, _) = await Sync();
+        Assert.Equal(0, plan.Count(SyncActionKind.Move));
+        Assert.Equal(1, plan.Count(SyncActionKind.Copy));
+        Assert.Equal(1, plan.Count(SyncActionKind.Delete));
+    }
+}
