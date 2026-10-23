@@ -10,3 +10,4 @@ dist/
 *.img
 .env
 appsettings.*.local.json
+web/node_modules/

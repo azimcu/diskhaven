@@ -1,0 +1,23 @@
+# Development instance on homenas. Fully isolated: own project name, own network, only the
+# dummy-data folder is mounted. Remove everything with:  dev/remove-dev.sh
+name: homevault-dev
+services:
+  homevault:
+    build: ..
+    image: homevault:dev
+    container_name: homevault-dev
+    user: "1000:1000"
+    restart: unless-stopped
+    ports:
+      - "8095:8080"
+    volumes:
+      - /mnt/immich/homevault-dev/data:/data
+      - /mnt/immich/homevault-dev/config:/config
+    mem_limit: 768m
+    cpus: 1.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
