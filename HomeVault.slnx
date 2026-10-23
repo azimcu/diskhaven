@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/HomeVault.Api/HomeVault.Api.csproj" />
+    <Project Path="src/HomeVault.Core/HomeVault.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/HomeVault.Core.Tests/HomeVault.Core.Tests.csproj" />
+  </Folder>
+</Solution>
