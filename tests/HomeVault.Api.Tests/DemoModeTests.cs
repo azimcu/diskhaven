@@ -70,3 +70,16 @@ public class DemoModeTests
         finally { d.Delete(true); }
     }
 }
+
+public class TelemetryTests
+{
+    [Theory]
+    [InlineData("/api/files/folder", "folder")]
+    [InlineData("/api/files/delete", "delete")]
+    [InlineData("/api/trash/abc123/restore", "restore")]
+    [InlineData("/api/trash/abc123", "purge")]
+    [InlineData("/api/trash", "purge")]
+    [InlineData("/api/trash/", "purge")]
+    public void Names_file_operations_by_path(string path, string expected) =>
+        Assert.Equal(expected, Telemetry.OperationName(new PathString(path)));
+}

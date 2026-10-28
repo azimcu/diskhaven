@@ -1,0 +1,85 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+using OpenTelemetry.Exporter;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+
+namespace HomeVault.Api;
+
+/// <summary>
+/// OpenTelemetry: request timings, errors, .NET runtime numbers and HomeVault's own counters.
+/// Off unless an OTLP/HTTP address is configured, so a plain install sends nothing anywhere:
+///   HomeVault:Telemetry:Metrics  e.g. http://prometheus:9090/api/v1/otlp/v1/metrics
+///   HomeVault:Telemetry:Traces   e.g. http://jaeger:4318/v1/traces
+///   HomeVault:Telemetry:ServiceName (default "homevault")
+/// </summary>
+public static class Telemetry
+{
+    public const string Name = "HomeVault";
+    public static readonly ActivitySource Source = new(Name);
+    static readonly Meter Meter = new(Name);
+
+    public static readonly Counter<long> FileOperations =
+        Meter.CreateCounter<long>("homevault.file_operations", description: "Completed file changes (folder, rename, move, copy, delete, restore)");
+    public static readonly Counter<long> Uploads =
+        Meter.CreateCounter<long>("homevault.uploads", description: "Files uploaded and verified");
+    public static readonly Counter<long> UploadedBytes =
+        Meter.CreateCounter<long>("homevault.uploaded_bytes", unit: "By", description: "Bytes uploaded and verified");
+    public static readonly Counter<long> FailedLogins =
+        Meter.CreateCounter<long>("homevault.failed_logins", description: "Sign-ins with a wrong user name or password");
+    public static readonly Counter<long> ShareDownloads =
+        Meter.CreateCounter<long>("homevault.share_downloads", description: "Files fetched through public share links");
+
+    public static void AddHomeVaultTelemetry(this WebApplicationBuilder builder)
+    {
+        var metrics = builder.Configuration["HomeVault:Telemetry:Metrics"];
+        var traces = builder.Configuration["HomeVault:Telemetry:Traces"];
+        if (string.IsNullOrWhiteSpace(metrics) && string.IsNullOrWhiteSpace(traces))
+            return;
+        var otel = builder.Services.AddOpenTelemetry()
+            .ConfigureResource(r => r.AddService(builder.Configuration["HomeVault:Telemetry:ServiceName"] ?? "homevault"));
+        if (!string.IsNullOrWhiteSpace(metrics))
+            otel.WithMetrics(m => m
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddRuntimeInstrumentation()
+                .AddMeter(Name)
+                .AddOtlpExporter((o, reader) =>
+                {
+                    o.Endpoint = new Uri(metrics);
+                    o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                    reader.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = 30_000;
+                }));
+        if (!string.IsNullOrWhiteSpace(traces))
+            otel.WithTracing(t => t
+                // health checks run every few seconds and would drown out real requests
+                .AddAspNetCoreInstrumentation(o => o.Filter = ctx => !ctx.Request.Path.StartsWithSegments("/api/health"))
+                .AddHttpClientInstrumentation()
+                .AddSource(Name)
+                .AddOtlpExporter(o =>
+                {
+                    o.Endpoint = new Uri(traces);
+                    o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                }));
+    }
+
+    /// <summary>Counts a file change once the endpoint answered with success; the kind is the last path segment.</summary>
+    public static async ValueTask<object?> CountFileOperation(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
+    {
+        var result = await next(ctx);
+        var http = ctx.HttpContext;
+        if (!HttpMethods.IsGet(http.Request.Method) && (result is not IStatusCodeHttpResult r || r.StatusCode is null or < 400))
+            FileOperations.Add(1, new KeyValuePair<string, object?>("operation", OperationName(http.Request.Path)));
+        return result;
+    }
+
+    public static string OperationName(PathString path) =>
+        path.Value?.TrimEnd('/').Split('/') switch
+        {
+            [.., "trash", _, "restore"] => "restore",
+            [.., "trash", _] or [.., "trash"] => "purge",
+            [.., var last] when last.Length > 0 => last,
+            _ => "unknown",
+        };
+}

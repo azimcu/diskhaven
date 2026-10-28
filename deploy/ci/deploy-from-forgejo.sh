@@ -11,7 +11,7 @@ REPO=${HV_FORGEJO_REPO:-azimcu/homevault}
 TOKEN=$(cat "${HV_FORGEJO_TOKEN_FILE:-/etc/homevault-ci/token}")
 STATE=/var/lib/homevault-ci; SRC=$STATE/src
 PROD_COMPOSE=${HV_PROD_COMPOSE:-/home/azim/projeler/homevault/deploy/compose.yml}
-umask 077; install -d -m 700 $STATE
+install -d -m 700 $STATE   # private state dir; the checkout inside keeps normal file modes (the app must read them)
 exec 9>/run/homevault-ci.lock; flock -n 9 || exit 0
 
 api() { curl -fsS -m 20 -H "Authorization: token $TOKEN" "$API/repos/$REPO/$1"; }
