@@ -373,8 +373,11 @@ app.MapTus("/api/tus", _ => Task.FromResult(new DefaultTusConfiguration
         OnBeforeCreateAsync = ctx =>
         {
             var free = new DriveInfo(root.FullPath).AvailableFreeSpace;
-            const long reserve = 1L << 30; // keep 1 GB free
-            if (ctx.UploadLength > free - reserve)
+            // keep 1 GB free; the demo sits on its own small disk and is capped below instead
+            var reserve = demo.Enabled ? 0 : 1L << 30;
+            if (demo.Enabled && ctx.UploadLength < 0)
+                ctx.FailRequest(System.Net.HttpStatusCode.LengthRequired, "Demoda dosya boyutu baştan bildirilmeli.");
+            else if (ctx.UploadLength > free - reserve)
                 ctx.FailRequest(System.Net.HttpStatusCode.InsufficientStorage, "Not enough free space on the disk.");
             else if (demo.Enabled && ctx.UploadLength > demo.MaxUploadBytes)
                 ctx.FailRequest(System.Net.HttpStatusCode.RequestEntityTooLarge, $"Demoda dosya başına en fazla {demo.MaxUploadBytes >> 20} MB.");

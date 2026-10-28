@@ -1,5 +1,5 @@
-# Public demo (demo.azimunal.com.tr). Separate from the real instance: own folders, no disk agent,
-# no host disks, small CPU/RAM caps. deploy/demo/install-demo.sh creates it; reset-demo.sh resets it hourly.
+# Public demo (demo.azimunal.com.tr). Separate from the real instance: own folders on a 1 GB disk image
+# (copies/uploads can never fill the host), no disk agent, no host disks, small CPU/RAM caps. deploy/demo/install-demo.sh creates it; reset-demo.sh resets it hourly.
 name: homevault-demo
 services:
   homevault-demo:
