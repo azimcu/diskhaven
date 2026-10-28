@@ -65,7 +65,7 @@ export const api = {
     request<{ path: string; sha256: string; size: number }>('POST', `/api/uploads/${id}/commit`,
       { destination, relativeName, sha256, lastModified }),
 
-  disks: () => request<{ agent: boolean; disks: Disk[]; job: SyncJob | null }>('GET', '/api/disks'),
+  disks: () => request<{ agent: boolean; demo?: boolean; disks: Disk[]; job: SyncJob | null }>('GET', '/api/disks'),
   diskAction: (id: string, action: 'mount' | 'unmount' | 'standby' | 'power-off' | 'power-on') =>
     request<void>('POST', `/api/disks/${encodeURIComponent(id)}/${action}`),
   adoptDisk: (id: string, name: string) => request<unknown>('POST', `/api/disks/${encodeURIComponent(id)}/adopt`, { name }),

@@ -1,0 +1,30 @@
+# Public demo (demo.azimunal.com.tr). Separate from the real instance: own folders, no disk agent,
+# no host disks, small CPU/RAM caps. deploy/demo/install-demo.sh creates it; reset-demo.sh resets it hourly.
+name: homevault-demo
+services:
+  homevault-demo:
+    image: ${HV_DEMO_IMAGE:-homevault:demo}
+    container_name: homevault-demo
+    user: "${HV_UID}:${HV_GID}"
+    restart: unless-stopped
+    ports:
+      - "${HV_DEMO_PORT:-8097}:8080"
+    environment:
+      TZ: Europe/Istanbul
+      HomeVault__Demo__Enabled: "true"
+      HomeVault__Demo__UserName: demo
+      HomeVault__Demo__Password: ${HV_DEMO_PASSWORD}
+      HomeVault__Demo__MaxUploadMB: "20"
+      HomeVault__Demo__MaxTotalMB: "400"
+    volumes:
+      - ${HV_DEMO_ROOT}/live/data:/data
+      - ${HV_DEMO_ROOT}/live/config:/config
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 200
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp

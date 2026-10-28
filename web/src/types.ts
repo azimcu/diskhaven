@@ -31,6 +31,8 @@ export interface AuthState {
   setupRequired: boolean
   user: string | null
   isAdmin?: boolean
+  /** set on the public demo instance: the sign-in shown on the login page */
+  demo?: { userName: string; password: string } | null
 }
 
 export interface Share {

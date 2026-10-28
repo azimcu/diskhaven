@@ -4,6 +4,7 @@
     <Project Path="src/HomeVault.Core/HomeVault.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/HomeVault.Api.Tests/HomeVault.Api.Tests.csproj" />
     <Project Path="tests/HomeVault.Core.Tests/HomeVault.Core.Tests.csproj" />
   </Folder>
 </Solution>
