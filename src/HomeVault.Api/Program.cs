@@ -179,14 +179,9 @@ var files = app.MapGroup("/api/files").RequireAuthorization();
 files.MapGet("/", (string? path, FileBrowser browser) =>
     Guard(() => Results.Ok(new { path = VaultRoot.Normalize(path), entries = browser.List(path) })));
 
-files.MapGet("/content", (string path, bool? download, FileBrowser browser) => Guard(() =>
+files.MapGet("/content", (string path, bool? download, HttpContext ctx, FileBrowser browser) => Guard(() =>
 {
-    var full = browser.GetFile(path);
-    if (!contentTypes.TryGetContentType(full, out var type))
-        type = "application/octet-stream";
-    // Range requests let video players seek and let interrupted downloads resume.
-    return Results.File(full, type, download == true ? Path.GetFileName(full) : null,
-        lastModified: File.GetLastWriteTimeUtc(full), enableRangeProcessing: true);
+    return ServeFile(ctx, browser.GetFile(path), download == true);
 }));
 
 files.MapPost("/folder", (FolderRequest req, FileOperations ops) =>
@@ -259,16 +254,13 @@ publicApi.MapGet("/", (string token, string? path, ShareStore shares, FileBrowse
         .Select(e => e with { Path = e.Path[prefix..] });   // paths relative to the shared folder, never the vault
     return Results.Ok(new { name, kind = EntryKind.Folder, size = (long?)null, by, expiresAt = share.ExpiresAt, entries = (object?)entries });
 }));
-publicApi.MapGet("/content", (string token, string? path, bool? download, ShareStore shares, FileBrowser browser) => Guard(() =>
+publicApi.MapGet("/content", (string token, string? path, bool? download, HttpContext ctx, ShareStore shares, FileBrowser browser) => Guard(() =>
 {
     var share = shares.Find(token) ?? throw new KeyNotFoundException("This link has expired or was removed.");
     var full = browser.GetFile(ShareStore.Inside(share, path));
-    if (!contentTypes.TryGetContentType(full, out var type))
-        type = "application/octet-stream";
     if (download == true)
         shares.CountDownload(share.Id);
-    return Results.File(full, type, download == true ? Path.GetFileName(full) : null,
-        lastModified: File.GetLastWriteTimeUtc(full), enableRangeProcessing: true);
+    return ServeFile(ctx, full, download == true);
 }));
 
 // ---- users (admin) ----------------------------------------------------------------------
@@ -412,6 +404,28 @@ if (!app.Services.GetRequiredService<AccountStore>().HasAccounts)
         app.Services.GetRequiredService<AccountStore>().SetupTokenPath);
 
 app.Run();
+
+// Serves a stored file. Only passive media (images, audio, video, PDF, plain text) is shown inline; anything that a
+// browser could run (HTML, SVG, XML, scripts...) is always downloaded, so a stored file can never act on this origin
+// with the viewer's session. The sandbox CSP blocks scripts even if a browser sniffs the type.
+IResult ServeFile(HttpContext ctx, string full, bool download)
+{
+    if (!contentTypes.TryGetContentType(full, out var type))
+        type = "application/octet-stream";
+    var passive = type.StartsWith("image/") && type != "image/svg+xml" || type.StartsWith("video/") || type.StartsWith("audio/")
+                  || type is "application/pdf" or "text/plain";
+    if (!passive)
+    {
+        download = true;
+        type = "application/octet-stream";
+    }
+    ctx.Response.Headers.XContentTypeOptions = "nosniff";
+    if (type != "application/pdf")   // the browser's PDF viewer does not open under a sandbox policy; it runs isolated anyway
+        ctx.Response.Headers.ContentSecurityPolicy = "sandbox; default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'";
+    // Range requests let video players seek and let interrupted downloads resume.
+    return Results.File(full, type, download ? Path.GetFileName(full) : null,
+        lastModified: File.GetLastWriteTimeUtc(full), enableRangeProcessing: true);
+}
 
 static Task SignIn(HttpContext ctx, Account account) =>
     ctx.SignInAsync(new ClaimsPrincipal(new ClaimsIdentity(
