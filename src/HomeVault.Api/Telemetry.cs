@@ -54,7 +54,12 @@ public static class Telemetry
         if (!string.IsNullOrWhiteSpace(traces))
             otel.WithTracing(t => t
                 // health checks run every few seconds and would drown out real requests
-                .AddAspNetCoreInstrumentation(o => o.Filter = ctx => !ctx.Request.Path.StartsWithSegments("/api/health"))
+                .AddAspNetCoreInstrumentation(o =>
+                {
+                    o.Filter = ctx => !ctx.Request.Path.StartsWithSegments("/api/health");
+                    // share tokens and file names must not leave the app: keep only the route template
+                    o.EnrichWithHttpResponse = (activity, response) => Redact(activity, response.HttpContext);
+                })
                 .AddHttpClientInstrumentation()
                 .AddSource(Name)
                 .AddOtlpExporter(o =>
@@ -62,6 +67,14 @@ public static class Telemetry
                     o.Endpoint = new Uri(traces);
                     o.Protocol = OtlpExportProtocol.HttpProtobuf;
                 }));
+    }
+
+    /// <summary>Replaces the real path (which can hold a share token or file names) with the route template, drops the query.</summary>
+    public static void Redact(Activity activity, HttpContext ctx)
+    {
+        var template = (ctx.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText;
+        activity.SetTag("url.path", template is null ? "(unmatched)" : "/" + template.TrimStart('/'));
+        activity.SetTag("url.query", null);
     }
 
     /// <summary>Counts a file change once the endpoint answered with success; the kind is the last path segment.</summary>
