@@ -13,7 +13,10 @@ jobs:
     runs-on: docker
     container: mcr.microsoft.com/dotnet/sdk:10.0
     steps:
-      - uses: https://data.forgejo.org/actions/checkout@v4
+      - name: Checkout   # the .NET image has git but no Node, so no actions/checkout here
+        run: |
+          git init -q . && git -c "http.extraHeader=Authorization: token ${{ github.token }}" \
+            fetch -q --depth 1 "${{ github.server_url }}/${{ github.repository }}" "${{ github.sha }}" && git checkout -q FETCH_HEAD
       - run: dotnet test HomeVault.slnx -c Release --logger "console;verbosity=normal"
 
   web:
