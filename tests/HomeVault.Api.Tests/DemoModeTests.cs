@@ -83,3 +83,20 @@ public class TelemetryTests
     public void Names_file_operations_by_path(string path, string expected) =>
         Assert.Equal(expected, Telemetry.OperationName(new PathString(path)));
 }
+
+public class TraceRedactionTests
+{
+    [Fact]
+    public void Keeps_only_the_route_template()
+    {
+        var ctx = new DefaultHttpContext();
+        ctx.SetEndpoint(new Microsoft.AspNetCore.Routing.RouteEndpoint(_ => Task.CompletedTask,
+            Microsoft.AspNetCore.Routing.Patterns.RoutePatternFactory.Parse("/api/public/{token}/content"), 0, null, null));
+        using var a = new System.Diagnostics.Activity("t");
+        a.SetTag("url.path", "/api/public/SECRET123/content");
+        a.SetTag("url.query", "?path=Belgeler/gizli.pdf");
+        Telemetry.Redact(a, ctx);
+        Assert.Equal("/api/public/{token}/content", a.GetTagItem("url.path"));
+        Assert.Null(a.GetTagItem("url.query"));
+    }
+}
