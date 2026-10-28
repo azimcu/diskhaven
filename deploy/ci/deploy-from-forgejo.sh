@@ -34,10 +34,10 @@ SHA=$(api branches/main | jq -r .commit.id); [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || e
 if [ "$SHA" != "$(cat $STATE/demo 2>/dev/null)" ] && green "$SHA"; then
     echo "demo <- $SHA"; status "$SHA" deploy/demo pending "deploying to demo"
     docker tag homevault:demo homevault:demo-previous 2>/dev/null || true
-    if build "$SHA" homevault:demo && /usr/local/sbin/homevault-demo-reset && healthy http://127.0.0.1:8097/api/health; then
+    if build "$SHA" homevault:demo && systemctl start homevault-demo-reset.service && healthy http://127.0.0.1:8097/api/health; then
         echo "$SHA" > $STATE/demo; status "$SHA" deploy/demo success "live on demo.azimunal.com.tr"
     else
-        docker tag homevault:demo-previous homevault:demo 2>/dev/null && /usr/local/sbin/homevault-demo-reset || true
+        docker tag homevault:demo-previous homevault:demo 2>/dev/null && systemctl start homevault-demo-reset.service || true
         echo "$SHA" > $STATE/demo; status "$SHA" deploy/demo failure "demo deploy failed, previous version kept"
     fi
 fi
