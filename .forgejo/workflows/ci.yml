@@ -1,0 +1,37 @@
+# CI on the home server's own Forgejo (runner in an isolated Docker-in-Docker).
+# Every push: API tests, web type-check + build, Docker image build.
+# The host's deployer (deploy/ci) then puts a green main on the demo, and a green v* tag on the real instance.
+name: ci
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: docker
+    container: mcr.microsoft.com/dotnet/sdk:10.0
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+      - run: dotnet test HomeVault.slnx -c Release --logger "console;verbosity=normal"
+
+  web:
+    runs-on: docker
+    container: node:22-bookworm
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+      - run: cd web && npm ci --no-audit --no-fund && npx tsc --noEmit -p . && npm run build
+
+  image:
+    needs: [test, web]
+    runs-on: docker
+    container: node:22-bookworm
+    env:
+      DOCKER_HOST: tcp://dind:2375
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v4
+      - name: Docker CLI
+        run: curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-29.0.0.tgz | tar xz -C /usr/local/bin --strip-components=1 docker/docker
+      - run: docker build -t homevault:ci-${{ github.sha }} .
+      - run: docker image rm homevault:ci-${{ github.sha }} && docker image prune -f
