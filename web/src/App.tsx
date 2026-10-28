@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, LogOut, Menu as MenuIcon, UserCircle2 } from 'lucide-react'
+import { KeyRound, LogOut, Menu as MenuIcon, UserCircle2, Users } from 'lucide-react'
 import { api } from './api'
 import { promptDialog, toast, toastError, Toasts } from './dialogs'
 import { Explorer, type Clipboard } from './Explorer'
@@ -8,17 +8,18 @@ import { t } from './strings'
 import { Transfers } from './Transfers'
 import { TrashView } from './TrashView'
 import { DisksView } from './DisksView'
+import { SharesView, UsersView } from './Sharing'
 import { Tree } from './Tree'
 import type { AuthState } from './types'
 import { filesFromDrop, uploads } from './uploads'
 
 // Location lives in the URL hash (#/files/Belgeler/Okul, #/trash) so browser back/forward and reload work.
-type Route = { view: 'files'; path: string } | { view: 'trash' } | { view: 'disks' }
+type Special = 'trash' | 'disks' | 'shares' | 'users'
+type Route = { view: 'files'; path: string } | { view: Special }
 
 function parseHash(): Route {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''))
-  if (h === 'trash') return { view: 'trash' }
-  if (h === 'disks') return { view: 'disks' }
+  if (h === 'trash' || h === 'disks' || h === 'shares' || h === 'users') return { view: h }
   return { view: 'files', path: h.startsWith('files') ? h.slice(5).replace(/^\/+|\/+$/g, '') : '' }
 }
 
@@ -85,7 +86,7 @@ export function App() {
   }
 
   if (!auth) return <div className="loading full"><span className="spinner" /></div>
-  if (!auth.user) return <><Login setup={auth.setupRequired} onDone={user => setAuth({ setupRequired: false, user })} /><Toasts /></>
+  if (!auth.user) return <><Login setup={auth.setupRequired} onDone={() => api.authState().then(setAuth).catch(() => {})} /><Toasts /></>
 
   return (
     <div className="app">
@@ -100,6 +101,7 @@ export function App() {
             <>
               <div className="menu-backdrop" onMouseDown={() => setUserMenu(false)} />
               <div className="menu user-menu">
+                {auth.isAdmin && <button className="menu-item" onClick={() => { setUserMenu(false); location.hash = '#/users' }}><span className="menu-ic"><Users size={16} /></span>{t.users}</button>}
                 <button className="menu-item" onClick={changePassword}><span className="menu-ic"><KeyRound size={16} /></span>{t.changePassword}</button>
                 <button className="menu-item" onClick={logout}><span className="menu-ic"><LogOut size={16} /></span>{t.logout}</button>
               </div>
@@ -110,14 +112,17 @@ export function App() {
       <div className="body">
         <div className={`side ${drawer ? 'open' : ''}`}>
           <Tree current={route.view === 'files' ? route.path : null} special={route.view === 'files' ? null : route.view}
-            version={version} onOpen={navigate} onOpenTrash={() => { location.hash = '#/trash' }}
-            onOpenDisks={() => { location.hash = '#/disks' }} onDropItems={onDropItems} />
+            version={version} onOpen={navigate} onOpenSpecial={v => { location.hash = `#/${v}` }}
+            isAdmin={!!auth.isAdmin} onDropItems={onDropItems} />
         </div>
         {drawer && <div className="side-backdrop" onClick={() => setDrawer(false)} />}
         {route.view === 'files'
           ? <Explorer path={route.path} version={version} clipboard={clipboard} setClipboard={setClipboard}
               navigate={navigate} changed={changed} onDropItems={onDropItems} storage={storage} />
-          : route.view === 'trash' ? <TrashView onChanged={changed} /> : <DisksView onChanged={changed} />}
+          : route.view === 'trash' ? <TrashView onChanged={changed} />
+          : route.view === 'shares' ? <SharesView />
+          : route.view === 'users' && auth.isAdmin ? <UsersView me={auth.user} />
+          : auth.isAdmin ? <DisksView onChanged={changed} /> : null}
       </div>
       <Transfers />
       <Toasts />

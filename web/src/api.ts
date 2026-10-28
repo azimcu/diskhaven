@@ -1,4 +1,4 @@
-import type { AfterSync, AuthState, Disk, FileEntry, Listing, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem } from './types'
+import type { AfterSync, AuthState, Disk, FileEntry, Listing, PublicItem, Share, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
 import { translateServerMessage } from './strings'
 
 export class ApiError extends Error {
@@ -47,6 +47,8 @@ export const api = {
     request<void>('POST', '/api/auth/password', { currentPassword, newPassword }),
 
   list: (path: string) => request<Listing>('GET', `/api/files?path=${q(path)}`),
+  search: (path: string, query: string) =>
+    request<Listing & { truncated: boolean }>('GET', `/api/files/search?path=${q(path)}&q=${q(query)}`),
   storage: () => request<{ total: number; free: number }>('GET', '/api/storage'),
   createFolder: (parent: string, name: string) => request<{ path: string }>('POST', '/api/files/folder', { parent, name }),
   rename: (path: string, newName: string) => request<{ path: string }>('POST', '/api/files/rename', { path, newName }),
@@ -76,6 +78,20 @@ export const api = {
   syncJob: () => request<SyncJob | null>('GET', '/api/sync/job'),
   cancelSync: () => request<void>('POST', '/api/sync/job/cancel'),
   syncHistory: (id: string) => request<SyncReport[]>('GET', `/api/disks/${encodeURIComponent(id)}/history`),
+
+  shares: () => request<Share[]>('GET', '/api/shares'),
+  createShare: (path: string, days: number | null) => request<Share>('POST', '/api/shares', { path, days }),
+  revokeShare: (id: string) => request<void>('DELETE', `/api/shares/${id}`),
+  shareUrl: (token: string) => `${location.origin}/s/${token}`,
+  publicItem: (token: string, path: string) => request<PublicItem>('GET', `/api/public/${encodeURIComponent(token)}?path=${q(path)}`),
+  publicContentUrl: (token: string, path: string, download = false) =>
+    `/api/public/${encodeURIComponent(token)}/content?path=${q(path)}${download ? '&download=true' : ''}`,
+
+  users: () => request<UserInfo[]>('GET', '/api/users'),
+  addUser: (userName: string, password: string, isAdmin: boolean) => request<UserInfo>('POST', '/api/users', { userName, password, isAdmin }),
+  removeUser: (name: string) => request<void>('DELETE', `/api/users/${encodeURIComponent(name)}`),
+  resetPassword: (name: string, newPassword: string) =>
+    request<void>('POST', `/api/users/${encodeURIComponent(name)}/password`, { newPassword }),
 
   contentUrl: (path: string, download = false) => `/api/files/content?path=${q(path)}${download ? '&download=true' : ''}`,
 }

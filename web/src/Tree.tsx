@@ -1,21 +1,21 @@
 import { useEffect, useState } from 'react'
-import { ChevronRight, HardDrive, Trash2, Usb } from 'lucide-react'
+import { ChevronRight, HardDrive, Link2, Trash2, Usb } from 'lucide-react'
 import { api, folderEntries } from './api'
 import { FileIcon } from './FileIcon'
 import { t } from './strings'
 
 interface Props {
   current: string | null // null = a special page is open
-  special: 'trash' | 'disks' | null
+  special: 'trash' | 'disks' | 'shares' | 'users' | null
   version: number
   onOpen: (path: string) => void
-  onOpenTrash: () => void
-  onOpenDisks: () => void
+  onOpenSpecial: (view: 'trash' | 'disks' | 'shares') => void
+  isAdmin: boolean
   onDropItems: (dest: string, e: React.DragEvent) => void
 }
 
 /** Left navigation pane: folder tree of the NAS (loaded lazily) and the recycle bin. */
-export function Tree({ current, special, version, onOpen, onOpenTrash, onOpenDisks, onDropItems }: Props) {
+export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin, onDropItems }: Props) {
   // expand the path to the current folder automatically
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']))
   useEffect(() => {
@@ -41,10 +41,13 @@ export function Tree({ current, special, version, onOpen, onOpenTrash, onOpenDis
     <nav className="tree" aria-label="Klasörler">
       <TreeNode path="" name={t.thisNas} depth={0} root {...{ current, expanded, toggle, onOpen, version, onDropItems }} />
       <div className="tree-sep" />
-      <button className={`tree-row ${special === 'disks' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={onOpenDisks}>
-        <Usb size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.disks}</span>
+      <button className={`tree-row ${special === 'shares' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('shares')}>
+        <Link2 size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.shares}</span>
       </button>
-      <button className={`tree-row ${special === 'trash' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={onOpenTrash}>
+      {isAdmin && <button className={`tree-row ${special === 'disks' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('disks')}>
+        <Usb size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.disks}</span>
+      </button>}
+      <button className={`tree-row ${special === 'trash' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('trash')}>
         <Trash2 size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.trash}</span>
       </button>
     </nav>

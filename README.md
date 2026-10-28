@@ -22,7 +22,7 @@ resume after interruptions, and one-click sync to external USB backup disks.
 4. **Boring, proven building blocks.** ASP.NET Core, PostgreSQL, the tus
    resumable-upload protocol, ffmpeg. HomeVault glues them together.
 
-## Planned features
+## Features (done and planned)
 
 - Windows Explorer–like web UI: folder tree, address bar, details / icons view,
   context menu, keyboard shortcuts, drag and drop, preview pane
@@ -33,6 +33,7 @@ resume after interruptions, and one-click sync to external USB backup disks.
   safety net for deletions
 - Monthly integrity scan against stored checksums
 - Recycle bin, share links, optional second user
+- Search across all subfolders (case- and accent-insensitive)
 - Android and Windows apps (Flutter) with background transfers; iPhone / iPad /
   Mac through the installable web app
 

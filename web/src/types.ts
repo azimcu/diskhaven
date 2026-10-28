@@ -30,7 +30,20 @@ export interface TrashItem {
 export interface AuthState {
   setupRequired: boolean
   user: string | null
+  isAdmin?: boolean
 }
+
+export interface Share {
+  id: string; token: string; path: string; kind: EntryKind; createdBy: string
+  createdAt: string; expiresAt: string | null; downloads: number
+}
+
+export interface PublicItem {
+  name: string; kind: EntryKind; size: number | null; by: string; expiresAt: string | null
+  entries: FileEntry[] | null
+}
+
+export interface UserInfo { userName: string; isAdmin: boolean; createdAt: string }
 
 export type AfterSync = 'PowerOff' | 'Standby' | 'StayOn'
 
