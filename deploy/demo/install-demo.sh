@@ -8,6 +8,14 @@ PASSWORD=homevault-demo          # shown on the demo login page on purpose
 PY=${DEMO_PYTHON:-/home/azim/.local/share/claude-tarayici/venv/bin/python}
 export PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-/home/azim/.local/share/claude-tarayici/browsers}
 
+# the live copy sits on its own 1 GB disk image, so nothing a visitor does can fill the host disk
+if ! mountpoint -q $ROOT/live; then
+    mkdir -p $ROOT/live
+    [ -f $ROOT/live.img ] || { fallocate -l 1G $ROOT/live.img; mkfs.ext4 -q -L hv-demo -m 0 $ROOT/live.img; }
+    grep -q "$ROOT/live.img" /etc/fstab || { cp -a /etc/fstab /etc/fstab.before-homevault-demo
+        echo "$ROOT/live.img $ROOT/live ext4 loop,nofail,noatime,nodev,nosuid,noexec 0 2" >> /etc/fstab; systemctl daemon-reload; }
+    mount $ROOT/live
+fi
 getent passwd homevault-demo >/dev/null || useradd -r -s /usr/sbin/nologin -d $ROOT homevault-demo
 HV_UID=$(id -u homevault-demo); HV_GID=$(id -g homevault-demo)
 cat > $HERE/.env <<ENV
@@ -20,7 +28,7 @@ docker image inspect homevault:demo >/dev/null 2>&1 || docker build -t homevault
 
 if [ ! -d $ROOT/clean/data ] || [ "${1:-}" = --reseed ]; then
     docker compose -f $HERE/compose.yml down 2>/dev/null || true
-    rm -rf $ROOT/clean $ROOT/live; mkdir -p $ROOT/clean/config $ROOT/live
+    rm -rf $ROOT/clean $ROOT/live/data $ROOT/live/config; mkdir -p $ROOT/clean/config
     "$PY" "$REPO/deploy/demo/seed-demo.py" $ROOT/clean/data
     chown -R $HV_UID:$HV_GID $ROOT/clean
     # first start on the clean copy, create the demo account with the setup code, stop
@@ -31,8 +39,8 @@ if [ ! -d $ROOT/clean/data ] || [ "${1:-}" = --reseed ]; then
     curl -fs -m 10 -H 'X-HomeVault: 1' -H 'Content-Type: application/json' \
         -d "{\"token\":\"$TOKEN\",\"userName\":\"demo\",\"password\":\"$PASSWORD\"}" http://127.0.0.1:8097/api/auth/setup >/dev/null
     docker compose -f $HERE/compose.yml stop
-    rm -rf $ROOT/clean; mv $ROOT/live $ROOT/clean.new; mkdir -p $ROOT/clean
-    mv $ROOT/clean.new/data $ROOT/clean.new/config $ROOT/clean/; rmdir $ROOT/clean.new
+    rm -rf $ROOT/clean; mkdir -p $ROOT/clean
+    mv $ROOT/live/data $ROOT/live/config $ROOT/clean/
     rm -rf $ROOT/clean/data/.homevault/uploads/* 2>/dev/null || true
 fi
 
