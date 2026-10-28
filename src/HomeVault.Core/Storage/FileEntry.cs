@@ -14,3 +14,6 @@ public sealed record FileEntry(
     bool Hidden,
     int? Files = null,
     int? Folders = null);
+
+/// <summary>Search hits; <c>Truncated</c> is true when the hit limit was reached.</summary>
+public sealed record SearchResult(IReadOnlyList<FileEntry> Entries, bool Truncated);

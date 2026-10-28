@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronRight, ClipboardPaste, Copy, Download, FolderOpen, FolderPlus,
-  FolderUp, LayoutGrid, List, MoreVertical, PanelRight, Pencil, RefreshCw, Scissors, Search, Trash2, Upload,
+  FolderUp, LayoutGrid, Link2, List, MoreVertical, PanelRight, Pencil, RefreshCw, Scissors, Search, Trash2, Upload,
 } from 'lucide-react'
 import { api } from './api'
 import { toast, toastError } from './dialogs'
 import { FileIcon } from './FileIcon'
 import { formatDate, formatSize, nameOf, parentOf, previewKind, typeName, uniqueName } from './format'
 import { PreviewModal, PreviewPane } from './Preview'
+import { shareDialog } from './Sharing'
 import { t } from './strings'
 import type { FileEntry } from './types'
 import { filesFromInput, uploadEvents, uploads } from './uploads'
@@ -46,18 +47,36 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   const [viewer, setViewer] = useState<FileEntry | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [editingPath, setEditingPath] = useState(false)
+  // recursive search (Enter in the search box); null = normal folder view
+  const [results, setResults] = useState<{ q: string; entries: FileEntry[]; truncated: boolean } | null>(null)
+  const [searching, setSearching] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
   const longPress = useRef<number | undefined>(undefined)
 
+  const runSearch = useCallback(async (query: string) => {
+    const q = query.trim()
+    if (!q) { setResults(null); return }
+    setSearching(true)
+    try {
+      const r = await api.search(path, q)
+      setResults({ q, entries: r.entries, truncated: r.truncated })
+      setSelected(new Set())
+    } catch (e) { toastError(e) }
+    setSearching(false)
+  }, [path])
+
+  const resultsRef = useRef(results)
+  resultsRef.current = results
   const load = useCallback(() => {
+    if (resultsRef.current) void runSearch(resultsRef.current.q) // keep search results fresh after rename/delete
     api.list(path)
       .then(l => { setEntries(l.entries); setError(null) })
       .catch(e => { setEntries([]); setError(e.message) })
-  }, [path])
+  }, [path, runSearch])
 
-  useEffect(() => { setEntries(null); setSelected(new Set()); setFilter(''); setRenaming(null) }, [path])
+  useEffect(() => { setEntries(null); setSelected(new Set()); setFilter(''); setRenaming(null); setResults(null) }, [path])
   useEffect(load, [load, version])
   useEffect(() => {
     const on = (e: Event) => { if ((e as CustomEvent).detail === path) load() }
@@ -67,6 +86,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   useEffect(() => { listRef.current?.focus({ preventScroll: true }) }, [path])
 
   const shown = useMemo(() => {
+    if (results) return results.entries.filter(e => !e.hidden)
     if (!entries) return []
     const f = filter.trim().toLocaleLowerCase('tr-TR')
     const list = entries.filter(e => !e.hidden && (!f || e.name.toLocaleLowerCase('tr-TR').includes(f)))
@@ -79,7 +99,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
       else if (sort.key === 'type') c = collator.compare(typeName(a), typeName(b))
       return (c || collator.compare(a.name, b.name)) * dir
     })
-  }, [entries, filter, sort])
+  }, [entries, filter, sort, results])
 
   const sel = shown.filter(e => selected.has(e.path))
   const single = sel.length === 1 ? sel[0] : null
@@ -300,10 +320,19 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
         )}
         <label className="search">
           <Search size={14} />
-          <input value={filter} onChange={e => setFilter(e.target.value)} placeholder={t.searchIn(folderName)} />
+          <input type="search" enterKeyHint="search" value={filter} placeholder={t.searchIn(folderName)}
+            onChange={e => { setFilter(e.target.value); if (!e.target.value) setResults(null) }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void runSearch(filter) } if (e.key === 'Escape') { setFilter(''); setResults(null) } }} />
+          {filter.trim() && !results && <button className="search-all" onClick={() => runSearch(filter)} title={t.searchAll}>{searching ? t.searching : t.searchAll}</button>}
         </label>
       </div>
 
+      {results && (
+        <p className="info-strip search-strip">
+          <span>{t.searchResults(results.q, results.entries.length, results.truncated)}</span>
+          <button className="link" onClick={() => { setResults(null); setFilter('') }}>{t.clearSearch}</button>
+        </p>
+      )}
       <div className="content">
         <div
           ref={listRef}
@@ -334,6 +363,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
               <tbody>
                 {shown.map(e => (
                   <Row key={e.path} entry={e} selected={selected.has(e.path)} cut={clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)}
+                    location={results ? parentOf(e.path) : undefined}
                     renaming={renaming === e.path} onRename={v => commitRename(e, v)} onCancelRename={() => setRenaming(null)}
                     onClick={ev => clickRow(ev, e)} onDoubleClick={() => open(e)} onContextMenu={ev => contextRow(ev, e)}
                     onDragStart={ev => dragStart(ev, e)} onDropItems={onDropItems}
@@ -383,6 +413,8 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
           { label: t.copy, icon: <Copy size={16} />, hint: 'Ctrl+C', run: () => toClipboard('copy', sel) },
           'sep',
           single && { label: t.rename, icon: <Pencil size={16} />, hint: 'F2', run: () => setRenaming(single.path) },
+          single && { label: t.share, icon: <Link2 size={16} />, run: () => void shareDialog(single) },
+          single && results && { label: t.openLocation, icon: <FolderOpen size={16} />, run: () => navigate(parentOf(single.path)) },
           { label: t.delete, icon: <Trash2 size={16} />, hint: 'Del', run: () => remove(sel) },
         ] : [
           { label: t.newFolder, icon: <FolderPlus size={16} />, hint: 'Ctrl+Shift+N', run: newFolder },
@@ -407,6 +439,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
 
 interface RowProps {
   entry: FileEntry
+  location?: string
   selected: boolean
   cut: boolean
   renaming: boolean
@@ -438,7 +471,8 @@ function Row(p: RowProps) {
       aria-selected={p.selected}>
       <td className="c-name">
         <FileIcon entry={e} />
-        {p.renaming ? <RenameInput entry={e} onDone={p.onRename} onCancel={p.onCancelRename} /> : <span className="name-text" title={e.name}>{e.name}</span>}
+        {p.renaming ? <RenameInput entry={e} onDone={p.onRename} onCancel={p.onCancelRename} />
+          : <span className="name-text" title={e.name}>{e.name}{p.location !== undefined && <small className="loc">/{p.location}</small>}</span>}
       </td>
       <td className="c-date">{formatDate(e.modified)}</td>
       <td className="c-type">{typeName(e)}</td>

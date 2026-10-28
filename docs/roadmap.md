@@ -7,9 +7,12 @@
 | 3 | Disk agent (mount, power off / on, standby, SMART); folder-to-disk assignment; one-way verified sync with plan, report, history, daily schedule | ✅ done (virtual disks); real USB disks to be tested |
 | 4 | Move to the production server; migrate the real 4 TB disk and backups | |
 | 5 | Previews and video streaming; integrity scans; Android and Windows apps; PWA for Apple devices | |
-| 6 | Share links, second user, Docker Compose install, CI, first public release | |
+| 6 | Share links ✅, second user ✅, search ✅, PNG app icons ✅; CI, first public release | in progress |
 
 ## Known gaps / next improvements
+
+- Users share one vault; per-user private folders are not implemented yet (all users see the same files; only admins manage disks and users).
+- Share links are read-only and can expire (1/7/30 days or never); they are not password-protected yet.
 
 - USB power-on after power-off depends on the USB enclosure; to be tested with the real disks.
 - Move detection matches files by size and modification time and checks the content (SHA-256) before moving; a file that was both moved and edited is copied again.

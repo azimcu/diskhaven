@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { t } from './strings'
 
-function Modal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+export function Modal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
@@ -15,7 +15,7 @@ function Modal({ children, onClose }: { children: ReactNode; onClose: () => void
   )
 }
 
-function mount<T>(render: (done: (v: T) => void) => ReactNode): Promise<T> {
+export function mount<T>(render: (done: (v: T) => void) => ReactNode): Promise<T> {
   return new Promise(resolve => {
     const host = document.createElement('div')
     document.body.appendChild(host)

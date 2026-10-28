@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using HomeVault.Api;
 using HomeVault.Api.Disks;
 using HomeVault.Core.Accounts;
+using HomeVault.Core.Sharing;
 using HomeVault.Core.Storage;
 using HomeVault.Core.Sync;
 using Microsoft.AspNetCore.Authentication;
@@ -34,6 +35,7 @@ builder.Services.AddSingleton<FileBrowser>();
 builder.Services.AddSingleton<FileOperations>();
 builder.Services.AddSingleton<UploadCommitter>();
 builder.Services.AddSingleton(new AccountStore(configDir));
+builder.Services.AddSingleton(new ShareStore(configDir));
 builder.Services.AddSingleton(tusStore);
 builder.Services.AddHostedService<Housekeeping>();
 builder.Services.AddHostedService<FolderSizeScanner>();
@@ -62,14 +64,31 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         // an API answers 401/403 instead of redirecting to a login page
         o.Events.OnRedirectToLogin = c => { c.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; };
         o.Events.OnRedirectToAccessDenied = c => { c.Response.StatusCode = StatusCodes.Status403Forbidden; return Task.CompletedTask; };
+        // a deleted account, a changed password or a changed role ends the session on every device
+        o.Events.OnValidatePrincipal = c =>
+        {
+            var accounts = c.HttpContext.RequestServices.GetRequiredService<AccountStore>();
+            var account = c.Principal?.Identity?.Name is { } name ? accounts.Find(name) : null;
+            if (account is null || c.Principal!.FindFirstValue("stamp") != AccountStore.Stamp(account) ||
+                c.Principal.IsInRole("admin") != account.IsAdmin)
+            {
+                c.RejectPrincipal();
+                return c.HttpContext.SignOutAsync();
+            }
+            return Task.CompletedTask;
+        };
     });
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorizationBuilder().AddPolicy("admin", p => p.RequireRole("admin"));
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     o.AddPolicy("login", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(1) }));
+    // share links are public: limit how fast one address can try tokens or pull files
+    o.AddPolicy("public", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1) }));
 });
 
 var app = builder.Build();
@@ -110,6 +129,7 @@ auth.MapGet("/state", (HttpContext ctx, AccountStore accounts) => Results.Ok(new
 {
     setupRequired = !accounts.HasAccounts,
     user = ctx.User.Identity?.IsAuthenticated == true ? ctx.User.Identity.Name : null,
+    isAdmin = ctx.User.IsInRole("admin"),
 }));
 
 auth.MapPost("/setup", async (SetupRequest req, HttpContext ctx, AccountStore accounts) =>
@@ -140,11 +160,13 @@ auth.MapPost("/logout", async (HttpContext ctx) =>
     return Results.NoContent();
 });
 
-auth.MapPost("/password", (PasswordRequest req, ClaimsPrincipal user, AccountStore accounts) =>
+auth.MapPost("/password", async (PasswordRequest req, ClaimsPrincipal user, HttpContext ctx, AccountStore accounts) =>
 {
     try
     {
         accounts.ChangePassword(user.Identity!.Name!, req.CurrentPassword, req.NewPassword);
+        // keep this device signed in with the new stamp; other devices are logged out
+        await SignIn(ctx, accounts.Find(user.Identity!.Name!)!);
         return Results.NoContent();
     }
     catch (UnauthorizedAccessException e) { return Results.Problem(e.Message, statusCode: 401); }
@@ -182,6 +204,14 @@ files.MapPost("/copy", (TransferRequest req, FileOperations ops) =>
 files.MapPost("/delete", (DeleteRequest req, FileOperations ops) =>
     Guard(() => Results.Ok(new { items = ops.Delete(req.Paths) })));
 
+files.MapGet("/search", (string? path, string q, FileBrowser browser, CancellationToken ct) => Guard(() =>
+{
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    timeout.CancelAfter(TimeSpan.FromSeconds(20));
+    var r = browser.Search(path, q, 500, timeout.Token);
+    return Results.Ok(new { path = VaultRoot.Normalize(path), entries = r.Entries, truncated = r.Truncated });
+}));
+
 app.MapGet("/api/storage", (VaultRoot vault) =>
 {
     var drive = new DriveInfo(vault.FullPath);
@@ -200,8 +230,74 @@ trash.MapDelete("/", (FileOperations ops) =>
     return Results.NoContent();
 });
 
-// ---- disks and sync -------------------------------------------------------------------
-var disksApi = app.MapGroup("/api/disks").RequireAuthorization();
+// ---- share links ------------------------------------------------------------------------
+var sharesApi = app.MapGroup("/api/shares").RequireAuthorization();
+sharesApi.MapGet("/", (ShareStore shares) => Results.Ok(shares.List()));
+sharesApi.MapPost("/", (ShareRequest req, ClaimsPrincipal user, ShareStore shares, VaultRoot vault) => Guard(() =>
+{
+    var full = vault.Resolve(req.Path);
+    var kind = Directory.Exists(full) ? EntryKind.Folder : File.Exists(full) ? EntryKind.File
+        : throw new FileNotFoundException("Item not found.");
+    TimeSpan? life = req.Days is > 0 ? TimeSpan.FromDays(req.Days.Value) : null;
+    return Results.Ok(shares.Create(req.Path, kind, user.Identity!.Name!, life));
+}));
+sharesApi.MapDelete("/{id}", (string id, ShareStore shares) => Guard(() => { shares.Revoke(id); return Results.NoContent(); }));
+
+// public side of a link: no login, read-only, only the shared item and what is inside it
+var publicApi = app.MapGroup("/api/public/{token}").RequireRateLimiting("public");
+publicApi.MapGet("/", (string token, string? path, ShareStore shares, FileBrowser browser, VaultRoot vault) => Guard(() =>
+{
+    var share = shares.Find(token) ?? throw new KeyNotFoundException("This link has expired or was removed.");
+    var target = ShareStore.Inside(share, path);
+    var full = vault.Resolve(target);
+    var name = Path.GetFileName(full);
+    var by = share.CreatedBy;
+    if (File.Exists(full))
+        return Results.Ok(new { name, kind = EntryKind.File, size = new FileInfo(full).Length, by, expiresAt = share.ExpiresAt, entries = (object?)null });
+    var prefix = share.Path.Length + 1;
+    var entries = browser.List(target).Where(e => !e.Hidden)
+        .Select(e => e with { Path = e.Path[prefix..] });   // paths relative to the shared folder, never the vault
+    return Results.Ok(new { name, kind = EntryKind.Folder, size = (long?)null, by, expiresAt = share.ExpiresAt, entries = (object?)entries });
+}));
+publicApi.MapGet("/content", (string token, string? path, bool? download, ShareStore shares, FileBrowser browser) => Guard(() =>
+{
+    var share = shares.Find(token) ?? throw new KeyNotFoundException("This link has expired or was removed.");
+    var full = browser.GetFile(ShareStore.Inside(share, path));
+    if (!contentTypes.TryGetContentType(full, out var type))
+        type = "application/octet-stream";
+    if (download == true)
+        shares.CountDownload(share.Id);
+    return Results.File(full, type, download == true ? Path.GetFileName(full) : null,
+        lastModified: File.GetLastWriteTimeUtc(full), enableRangeProcessing: true);
+}));
+
+// ---- users (admin) ----------------------------------------------------------------------
+var usersApi = app.MapGroup("/api/users").RequireAuthorization("admin");
+usersApi.MapGet("/", (AccountStore accounts) =>
+    Results.Ok(accounts.List().Select(a => new { userName = a.UserName, isAdmin = a.IsAdmin, createdAt = a.CreatedAt })));
+usersApi.MapPost("/", (NewUserRequest req, AccountStore accounts) =>
+{
+    try { var a = accounts.Create(req.UserName, req.Password, req.IsAdmin); return Results.Ok(new { userName = a.UserName, isAdmin = a.IsAdmin }); }
+    catch (InvalidOperationException e) { return Results.Problem(e.Message, statusCode: 409); }
+    catch (ArgumentException e) { return Results.Problem(e.Message, statusCode: 400); }
+});
+usersApi.MapDelete("/{name}", (string name, ClaimsPrincipal user, AccountStore accounts) =>
+{
+    if (name.Equals(user.Identity!.Name, StringComparison.OrdinalIgnoreCase))
+        return Results.Problem("You cannot remove your own account.", statusCode: 409);
+    try { accounts.Delete(name); return Results.NoContent(); }
+    catch (KeyNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
+    catch (InvalidOperationException e) { return Results.Problem(e.Message, statusCode: 409); }
+});
+usersApi.MapPost("/{name}/password", (string name, ResetPasswordRequest req, AccountStore accounts) =>
+{
+    try { accounts.SetPassword(name, req.NewPassword); return Results.NoContent(); }
+    catch (KeyNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
+    catch (ArgumentException e) { return Results.Problem(e.Message, statusCode: 400); }
+});
+
+// ---- disks and sync (admin) -----------------------------------------------------------
+var disksApi = app.MapGroup("/api/disks").RequireAuthorization("admin");
 
 disksApi.MapGet("/", async (DiskAgentClient agent, DiskService disks, SyncJobRunner runner, CancellationToken ct) =>
     !agent.Available
@@ -252,8 +348,8 @@ disksApi.MapPost("/{id}/plan", (string id, DiskService disks, DiskSettingsStore 
     }));
 disksApi.MapPost("/{id}/sync", (string id, SyncJobRunner runner) => Guard(() => Results.Ok(runner.Start(id))));
 
-app.MapGet("/api/sync/job", (SyncJobRunner runner) => Results.Ok(runner.Current)).RequireAuthorization();
-app.MapPost("/api/sync/job/cancel", (SyncJobRunner runner) => { runner.Cancel(); return Results.NoContent(); }).RequireAuthorization();
+app.MapGet("/api/sync/job", (SyncJobRunner runner) => Results.Ok(runner.Current)).RequireAuthorization("admin");
+app.MapPost("/api/sync/job/cancel", (SyncJobRunner runner) => { runner.Cancel(); return Results.NoContent(); }).RequireAuthorization("admin");
 
 // ---- uploads: tus protocol for resumable chunks, then a verified commit ----------------
 app.MapTus("/api/tus", _ => Task.FromResult(new DefaultTusConfiguration
@@ -319,7 +415,8 @@ app.Run();
 
 static Task SignIn(HttpContext ctx, Account account) =>
     ctx.SignInAsync(new ClaimsPrincipal(new ClaimsIdentity(
-        [new Claim(ClaimTypes.Name, account.UserName), new Claim(ClaimTypes.Role, account.IsAdmin ? "admin" : "user")],
+        [new Claim(ClaimTypes.Name, account.UserName), new Claim(ClaimTypes.Role, account.IsAdmin ? "admin" : "user"),
+         new Claim("stamp", AccountStore.Stamp(account))],
         CookieAuthenticationDefaults.AuthenticationScheme)),
         new AuthenticationProperties { IsPersistent = true });
 
@@ -353,6 +450,9 @@ record TransferRequest(string[] Paths, string? Destination);
 record DeleteRequest(string[] Paths);
 record AdoptRequest(string Name);
 record DiskSettingsRequest(string? Name, string[]? Folders, SyncSchedule? Schedule, AfterSync? After);
+record ShareRequest(string Path, int? Days);
+record NewUserRequest(string UserName, string Password, bool IsAdmin);
+record ResetPasswordRequest(string NewPassword);
 record CommitRequest(string? Destination, string RelativeName, string Sha256, long? LastModified);
 
 public partial class Program;

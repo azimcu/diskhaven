@@ -60,6 +60,62 @@ public sealed class AccountStore
         }
     }
 
+    public IReadOnlyList<Account> List() => Load().OrderBy(a => a.CreatedAt).ToList();
+
+    /// <summary>Adds an account (done by an admin from the users page).</summary>
+    public Account Create(string userName, string password, bool isAdmin)
+    {
+        lock (_lock)
+        {
+            var accounts = Load();
+            if (accounts.Count == 0)
+                throw new InvalidOperationException("Use the setup page to create the first account.");
+            var account = NewAccount(userName, password, isAdmin);
+            if (accounts.Any(a => a.UserName.Equals(account.UserName, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"User {account.UserName} already exists.");
+            accounts.Add(account);
+            Save(accounts);
+            return account;
+        }
+    }
+
+    /// <summary>Removes an account. The last admin cannot be removed, so the NAS can always be managed.</summary>
+    public void Delete(string userName)
+    {
+        lock (_lock)
+        {
+            var accounts = Load();
+            var account = accounts.FirstOrDefault(a => a.UserName.Equals(userName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new KeyNotFoundException("User not found.");
+            if (account.IsAdmin && accounts.Count(a => a.IsAdmin) == 1)
+                throw new InvalidOperationException("The last admin cannot be removed.");
+            accounts.Remove(account);
+            Save(accounts);
+        }
+    }
+
+    /// <summary>Sets a new password without the old one (an admin resetting another user's password).</summary>
+    public void SetPassword(string userName, string newPassword)
+    {
+        lock (_lock)
+        {
+            var accounts = Load();
+            var i = accounts.FindIndex(a => a.UserName.Equals(userName, StringComparison.OrdinalIgnoreCase));
+            if (i < 0)
+                throw new KeyNotFoundException("User not found.");
+            ValidatePassword(newPassword);
+            accounts[i] = accounts[i] with { PasswordHash = PasswordHasher.Hash(newPassword) };
+            Save(accounts);
+        }
+    }
+
+    /// <summary>
+    /// A short value that changes whenever the password changes. It is stored in the login cookie,
+    /// so changing a password (or deleting the account) logs out every other device.
+    /// </summary>
+    public static string Stamp(Account account) =>
+        Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(account.PasswordHash)))[..16];
+
     public void ChangePassword(string userName, string currentPassword, string newPassword)
     {
         lock (_lock)
