@@ -86,10 +86,11 @@ export function App() {
   }
 
   if (!auth) return <div className="loading full"><span className="spinner" /></div>
-  if (!auth.user) return <><Login setup={auth.setupRequired} onDone={() => api.authState().then(setAuth).catch(() => {})} /><Toasts /></>
+  if (!auth.user) return <><Login setup={auth.setupRequired} demo={auth.demo} onDone={() => api.authState().then(setAuth).catch(() => {})} /><Toasts /></>
 
   return (
     <div className="app">
+      {auth.demo && <div className="demo-bar" role="note">Demo: değişiklikler her saat başı sıfırlanır · dosya başına en fazla 20 MB · disk ve hesap ayarları kapalı</div>}
       <header className="titlebar">
         <button className="icon-btn show-sm" onClick={() => setDrawer(d => !d)} aria-label="Klasörler"><MenuIcon size={18} /></button>
         <img src="/icon.svg" width={20} height={20} alt="" />

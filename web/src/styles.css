@@ -388,3 +388,7 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 .public-head .btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: inherit; line-height: 32px; }
 .public-head .btn.primary { color: var(--accent-text); }
 .public-preview { display: block; max-width: 100%; max-height: 75vh; margin: 0 auto 12px; border-radius: var(--radius); }
+
+/* public demo instance */
+.demo-bar { background: var(--accent); color: var(--accent-text); font-size: 13px; text-align: center; padding: 4px 12px; }
+.demo-note { border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; margin: 0; }

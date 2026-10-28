@@ -23,7 +23,7 @@ const phaseText: Record<string, string> = {
 
 /** "This PC"-like page: every disk with its state, on/off switch, assigned folders and sync. */
 export function DisksView({ onChanged }: { onChanged: () => void }) {
-  const [data, setData] = useState<{ agent: boolean; disks: Disk[]; job: SyncJob | null } | null>(null)
+  const [data, setData] = useState<{ agent: boolean; demo?: boolean; disks: Disk[]; job: SyncJob | null } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
   const load = useCallback(() => api.disks().then(setData).catch(toastError), [])
@@ -74,7 +74,8 @@ export function DisksView({ onChanged }: { onChanged: () => void }) {
       </div>
       <div className="addressbar"><div className="crumbs"><span className="crumb current">Diskler</span></div></div>
       <div className="list-wrap disks-page">
-        {!data.agent && <p className="empty-note error">Disk servisi çalışmıyor. Sunucuda <code>homevault-diskd</code> servisini başlat.</p>}
+        {data.demo && <p className="empty-note">Demoda gerçek disk yok. Gerçek kurulumda USB diskler burada görünür: bağla, ayır, uyut, SMART sağlığına bak ve yedek eşitlemesi planla.</p>}
+        {!data.agent && !data.demo && <p className="empty-note error">Disk servisi çalışmıyor. Sunucuda <code>homevault-diskd</code> servisini başlat.</p>}
         {job && (job.status === 'Running' || Date.now() - new Date(job.started).getTime() < 10 * 60_000) && <JobCard job={job} />}
         {data.agent && data.disks.length === 0 && <p className="empty-note">Takılı bir USB disk yok.</p>}
         <div className="disk-grid">

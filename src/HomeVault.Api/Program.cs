@@ -23,11 +23,13 @@ var configDir = builder.Configuration["HomeVault:ConfigDir"]
     ?? throw new InvalidOperationException("HomeVault:ConfigDir is not configured.");
 
 var root = new VaultRoot(dataRoot);
+var demo = DemoOptions.From(builder.Configuration);
 var uploadDir = Path.Combine(root.FullPath, VaultRoot.InternalFolderName, "uploads");
 Directory.CreateDirectory(uploadDir);
 var tusStore = new TusDiskStore(uploadDir);
 
 builder.Services.AddSingleton(root);
+builder.Services.AddSingleton(demo);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<FolderSizeIndex>();
 builder.Services.AddSingleton<IVaultChangeListener>(sp => sp.GetRequiredService<FolderSizeIndex>());
@@ -111,6 +113,19 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
+// Public demo: account, disk, sync and share-link changes are switched off.
+if (demo.Enabled)
+    app.Use(async (ctx, next) =>
+    {
+        if (DemoOptions.IsBlocked(ctx.Request))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsJsonAsync(new { title = "Bu özellik demoda kapalı.", status = 403 });
+            return;
+        }
+        await next();
+    });
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseAuthentication();
@@ -130,6 +145,7 @@ auth.MapGet("/state", (HttpContext ctx, AccountStore accounts) => Results.Ok(new
     setupRequired = !accounts.HasAccounts,
     user = ctx.User.Identity?.IsAuthenticated == true ? ctx.User.Identity.Name : null,
     isAdmin = ctx.User.IsInRole("admin"),
+    demo = demo.Enabled ? new { userName = demo.UserName, password = demo.Password } : null,
 }));
 
 auth.MapPost("/setup", async (SetupRequest req, HttpContext ctx, AccountStore accounts) =>
@@ -209,6 +225,9 @@ files.MapGet("/search", (string? path, string q, FileBrowser browser, Cancellati
 
 app.MapGet("/api/storage", (VaultRoot vault) =>
 {
+    // the demo shows its own quota, not the host disk
+    if (demo.Enabled)
+        return Results.Ok(new { total = demo.MaxTotalBytes, free = Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(vault.FullPath)) });
     var drive = new DriveInfo(vault.FullPath);
     return Results.Ok(new { total = drive.TotalSize, free = drive.AvailableFreeSpace });
 }).RequireAuthorization();
@@ -292,6 +311,7 @@ usersApi.MapPost("/{name}/password", (string name, ResetPasswordRequest req, Acc
 var disksApi = app.MapGroup("/api/disks").RequireAuthorization("admin");
 
 disksApi.MapGet("/", async (DiskAgentClient agent, DiskService disks, SyncJobRunner runner, CancellationToken ct) =>
+    demo.Enabled ? Results.Ok(new { agent = false, demo = true, disks = Array.Empty<DiskView>(), job = (SyncJob?)null }) :
     !agent.Available
         ? Results.Ok(new { agent = false, disks = Array.Empty<DiskView>(), job = runner.Current })
         : await GuardAsync(async () => Results.Ok(new { agent = true, disks = await disks.ListAsync(ct), job = runner.Current })));
@@ -356,6 +376,10 @@ app.MapTus("/api/tus", _ => Task.FromResult(new DefaultTusConfiguration
             const long reserve = 1L << 30; // keep 1 GB free
             if (ctx.UploadLength > free - reserve)
                 ctx.FailRequest(System.Net.HttpStatusCode.InsufficientStorage, "Not enough free space on the disk.");
+            else if (demo.Enabled && ctx.UploadLength > demo.MaxUploadBytes)
+                ctx.FailRequest(System.Net.HttpStatusCode.RequestEntityTooLarge, $"Demoda dosya başına en fazla {demo.MaxUploadBytes >> 20} MB.");
+            else if (demo.Enabled && DemoOptions.FolderBytes(root.FullPath) + ctx.UploadLength > demo.MaxTotalBytes)
+                ctx.FailRequest(System.Net.HttpStatusCode.InsufficientStorage, "Demo alanı doldu; her saat başı sıfırlanır.");
             return Task.CompletedTask;
         },
     },
