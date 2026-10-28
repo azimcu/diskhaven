@@ -46,6 +46,7 @@ builder.Services.AddSingleton(new DiskSettingsStore(configDir));
 builder.Services.AddSingleton<DiskService>();
 builder.Services.AddSingleton<SyncJobRunner>();
 builder.Services.AddHostedService<SyncScheduler>();
+builder.AddHomeVaultTelemetry();
 builder.Services.AddProblemDetails();
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
@@ -165,7 +166,10 @@ auth.MapPost("/login", async (LoginRequest req, HttpContext ctx, AccountStore ac
 {
     var account = accounts.Authenticate(req.UserName, req.Password);
     if (account is null)
+    {
+        Telemetry.FailedLogins.Add(1);
         return Results.Problem("User name or password is wrong.", statusCode: 401);
+    }
     await SignIn(ctx, account);
     return Results.Ok(new { user = account.UserName });
 }).RequireRateLimiting("login");
@@ -190,7 +194,7 @@ auth.MapPost("/password", async (PasswordRequest req, ClaimsPrincipal user, Http
 }).RequireAuthorization().RequireRateLimiting("login");
 
 // ---- files ------------------------------------------------------------------------------
-var files = app.MapGroup("/api/files").RequireAuthorization();
+var files = app.MapGroup("/api/files").RequireAuthorization().AddEndpointFilter(Telemetry.CountFileOperation);
 
 files.MapGet("/", (string? path, FileBrowser browser) =>
     Guard(() => Results.Ok(new { path = VaultRoot.Normalize(path), entries = browser.List(path) })));
@@ -233,7 +237,7 @@ app.MapGet("/api/storage", (VaultRoot vault) =>
 }).RequireAuthorization();
 
 // ---- recycle bin ------------------------------------------------------------------------
-var trash = app.MapGroup("/api/trash").RequireAuthorization();
+var trash = app.MapGroup("/api/trash").RequireAuthorization().AddEndpointFilter(Telemetry.CountFileOperation);
 trash.MapGet("/", (FileOperations ops) => Results.Ok(ops.ListTrash()));
 trash.MapPost("/{id}/restore", (string id, FileOperations ops) => Guard(() => Results.Ok(new { path = ops.Restore(id) })));
 trash.MapDelete("/{id}", (string id, FileOperations ops) => Guard(() => { ops.Purge(id); return Results.NoContent(); }));
@@ -278,7 +282,10 @@ publicApi.MapGet("/content", (string token, string? path, bool? download, HttpCo
     var share = shares.Find(token) ?? throw new KeyNotFoundException("This link has expired or was removed.");
     var full = browser.GetFile(ShareStore.Inside(share, path));
     if (download == true)
+    {
         shares.CountDownload(share.Id);
+        Telemetry.ShareDownloads.Add(1);
+    }
     return ServeFile(ctx, full, download == true);
 }));
 
@@ -396,11 +403,15 @@ app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, Upl
     var offset = await tusStore.GetUploadOffsetAsync(id, ct);
     if (length is null || offset != length)
         return Results.Problem("Upload is not complete.", statusCode: 409);
+    using var activity = Telemetry.Source.StartActivity("upload.commit");
+    activity?.SetTag("homevault.upload.bytes", length);
     try
     {
         var result = await committer.CommitAsync(Path.Combine(uploadDir, id), req.Destination, req.RelativeName,
             req.Sha256, req.LastModified is { } ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null, ct);
         await tusStore.DeleteFileAsync(id, ct); // removes tus side files; the data file was moved
+        Telemetry.Uploads.Add(1);
+        Telemetry.UploadedBytes.Add(length.Value);
         return Results.Ok(result);
     }
     catch (ChecksumMismatchException e)

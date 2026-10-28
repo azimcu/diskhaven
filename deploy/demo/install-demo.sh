@@ -23,6 +23,9 @@ HV_UID=$HV_UID
 HV_GID=$HV_GID
 HV_DEMO_ROOT=$ROOT
 HV_DEMO_PASSWORD=$PASSWORD
+# gözlem yığını varsa (sunucuda ~/projeler/gozlem) ölçüm/iz gönder; yoksa boş bırak
+HV_OTLP_METRICS=${HV_OTLP_METRICS:-}
+HV_OTLP_TRACES=${HV_OTLP_TRACES:-}
 ENV
 docker image inspect homevault:demo >/dev/null 2>&1 || docker build -t homevault:demo "$REPO"
 
