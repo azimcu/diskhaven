@@ -22,20 +22,36 @@ resume after interruptions, and one-click sync to external USB backup disks.
 4. **Boring, proven building blocks.** ASP.NET Core, PostgreSQL, the tus
    resumable-upload protocol, ffmpeg. DiskHaven glues them together.
 
-## Features (done and planned)
+## Features
 
-- Windows Explorer–like web UI: folder tree, address bar, details / icons view,
-  context menu, keyboard shortcuts, drag and drop, preview pane
-- Resumable, chunked, verified uploads and downloads (hundreds of GB)
-- Video streaming and image/document preview in the browser
-- Disk manager: health (SMART), usage, attach / detach and spin-down of USB disks
-- Sync to external disks with a pre-sync summary, verification and a 30-day
-  safety net for deletions
-- Monthly integrity scan against stored checksums
-- Recycle bin, share links, optional second user
-- Search across all subfolders (case- and accent-insensitive)
-- Android and Windows apps (Flutter) with background transfers; iPhone / iPad /
-  Mac through the installable web app
+A small core, everything else is a plugin you install from the built-in store
+(and remove again without losing data). Plugins that are not installed are never
+downloaded by the browser and their API answers 404.
+
+**Core**
+- Windows 11 Explorer–like web UI: folder tree, drives with fill bars, address bar,
+  details / list / icons views with an icon size slider (Ctrl + wheel), context menu,
+  keyboard shortcuts, drag and drop, preview pane, Properties (Alt+Enter)
+- Hidden items like Windows (stored as an extended attribute, follows renames) and
+  "Show hidden items"
+- Resumable, chunked uploads verified with SHA-256; video streaming and previews
+- Recycle bin, search across all subfolders (case- and accent-insensitive)
+- Light and dark theme; follows the device until you pick one
+- Admin panel: overview, plugin store, users, activity log
+
+**Plugins**
+| Plugin | What it adds |
+|---|---|
+| ZIP archives | Compress to ZIP, extract all, download folders / selections as one ZIP |
+| Share links | Read-only links with an expiry, no account needed |
+| Disks and backup | External disks, one-way verified sync, schedules, SMART, power control |
+| Server gauge | Live CPU, memory, temperature and disk read/write in the status bar |
+| Quick access | Favourites and recently opened files |
+| Activity log | Who changed what and when, searchable in the admin panel |
+| Hidden folder | A separate, encrypted folder tree behind a password, listed under an inconspicuous name; recovery key, decoy password, encrypted copy on backup disks, offline recovery tool ([format](docs/hideaway.md)) |
+
+Planned: Android and Windows apps (Flutter) with background transfers; iPhone / iPad /
+Mac through the installable web app.
 
 Photos are intentionally out of scope: DiskHaven is designed to run next to
 [Immich](https://immich.app).
@@ -45,7 +61,8 @@ Photos are intentionally out of scope: DiskHaven is designed to run next to
 | Path | Contents |
 |---|---|
 | `src/DiskHaven.Core` | Storage logic (safe path handling, listings, later uploads and sync) |
-| `src/DiskHaven.Api` | ASP.NET Core HTTP API |
+| `src/DiskHaven.Api` | ASP.NET Core HTTP API, plugins |
+| `src/DiskHaven.Recover` | Offline recovery tool for the hidden folder |
 | `tests/` | Unit tests |
 | `dev/` | Development helpers: dummy data, simulated USB disks |
 | `docs/` | Architecture and roadmap |

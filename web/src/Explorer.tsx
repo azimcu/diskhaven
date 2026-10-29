@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
   FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, Link2, List, MoreVertical, PanelRight, Pencil,
-  RefreshCw, Rows3, Scissors, Search, Trash2, Upload,
+  RefreshCw, Rows3, Scissors, Search, Star, StarOff, Trash2, Upload,
 } from 'lucide-react'
 import { api } from './api'
 import { toast, toastError } from './dialogs'
@@ -11,7 +11,7 @@ import { formatDate, formatSize, nameOf, parentOf, previewKind, typeName, unique
 import { PreviewModal, PreviewPane } from './Preview'
 import { propertiesDialog } from './Properties'
 import { SystemGauge } from './SystemGauge'
-import { shareDialog } from './Sharing'
+import { hasPlugin, usePlugins } from './plugins'
 import { t } from './strings'
 import type { FileEntry } from './types'
 import { filesFromInput, uploadEvents, uploads } from './uploads'
@@ -50,6 +50,14 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   const [showHidden, setShowHiddenState] = useState(() => readPref('hv.hidden', '0') === '1')
   const setShowHidden = (v: boolean) => { setShowHiddenState(v); writePref('hv.hidden', v ? '1' : '0') }
   const [viewMenu, setViewMenu] = useState(false)
+  const plugins = usePlugins()
+  const [favorites, setFavorites] = useState<Set<string>>(new Set())
+  useEffect(() => { if (plugins.has('quick')) api.quick().then(q => setFavorites(new Set(q.favorites))).catch(() => {}) }, [plugins.has('quick'), version])
+  const toggleFavorite = async (e: FileEntry) => {
+    const on = !favorites.has(e.path)
+    setFavorites(f => { const n = new Set(f); if (on) n.add(e.path); else n.delete(e.path); return n })
+    try { await api.favorite(e.path, on); toast(on ? 'Favorilere eklendi' : 'Favorilerden çıkarıldı'); changed() } catch (err) { toastError(err) }
+  }
   const [pane, setPane] = useState(() => readPref('hv.pane', '0') === '1')
   const [filter, setFilter] = useState('')
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -117,6 +125,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
 
   // ---- actions ----------------------------------------------------------------------------
   const open = (e: FileEntry) => {
+    if (e.kind === 'File' && hasPlugin('quick')) void api.recent(e.path).catch(() => {})
     if (e.kind === 'Folder') return navigate(e.path)
     if (previewKind(e.extension)) return setViewer(e)
     window.location.href = api.contentUrl(e.path, true)
@@ -124,7 +133,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
 
   const download = (list: FileEntry[]) => {
     if (list.length === 0) return
-    if (list.some(x => x.kind === 'Folder') || list.length > 3) {
+    if (hasPlugin('archive') && (list.some(x => x.kind === 'Folder') || list.length > 3)) {
       // folders, or many files at once: one ZIP built on the fly, like a cloud drive
       const a = document.createElement('a')
       a.href = api.archiveUrl(list.map(x => x.path), list.length === 1 ? list[0].name : path ? nameOf(path) : 'DiskHaven')
@@ -504,22 +513,25 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
         <span>{t.items(shown.length)}</span>
         {sel.length > 0 && <span>{t.selected(sel.length)}{selectedSize > 0 ? ` · ${formatSize(selectedSize)}` : ''}</span>}
         <span className="grow" />
-        <SystemGauge />
+        {plugins.has('gauge') && <SystemGauge />}
         {storage && <span className="hide-sm">{t.free(formatSize(storage.free), formatSize(storage.total))}</span>}
       </footer>
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={menu.onItem ? [
           single && { label: single.kind === 'Folder' ? t.open : previewKind(single.extension) ? t.open : t.download, icon: <FolderOpen size={16} />, run: () => open(single) },
-          single?.extension === 'zip' && { label: t.extract, icon: <FolderInput size={16} />, run: () => extract(single) },
-          { label: sel.length === 1 && single?.kind === 'File' ? t.download : t.downloadZip, icon: <Download size={16} />, run: () => download(sel) },
+          plugins.has('archive') && single?.extension === 'zip' && { label: t.extract, icon: <FolderInput size={16} />, run: () => extract(single) },
+          (plugins.has('archive') || sel.every(e => e.kind === 'File')) && { label: sel.length === 1 && single?.kind === 'File' || !plugins.has('archive') ? t.download : t.downloadZip, icon: <Download size={16} />, run: () => download(sel) },
           'sep',
           { label: t.cut, icon: <Scissors size={16} />, hint: 'Ctrl+X', run: () => toClipboard('cut', sel) },
           { label: t.copy, icon: <Copy size={16} />, hint: 'Ctrl+C', run: () => toClipboard('copy', sel) },
           'sep',
           single && { label: t.rename, icon: <Pencil size={16} />, hint: 'F2', run: () => setRenaming(single.path) },
-          single && { label: t.share, icon: <Link2 size={16} />, run: () => void shareDialog(single) },
-          { label: t.compress, icon: <FileArchive size={16} />, run: () => compress(sel) },
+          plugins.has('sharing') && single && { label: t.share, icon: <Link2 size={16} />, run: () => void import('./Sharing').then(m => m.shareDialog(single)) },
+          plugins.has('quick') && single && (favorites.has(single.path)
+            ? { label: 'Favorilerden çıkar', icon: <StarOff size={16} />, run: () => toggleFavorite(single) }
+            : { label: 'Favorilere ekle', icon: <Star size={16} />, run: () => toggleFavorite(single) }),
+          plugins.has('archive') && { label: t.compress, icon: <FileArchive size={16} />, run: () => compress(sel) },
           { label: t.copyPath, icon: <Copy size={16} />, hint: 'Ctrl+Shift+C', run: () => copyPath(sel) },
           sel.every(e => e.hidden)
             ? { label: t.unhide, icon: <Eye size={16} />, run: () => setHidden(sel, false) }
@@ -597,7 +609,7 @@ function Row(p: RowProps) {
   )
 }
 
-function RenameInput({ entry, onDone, onCancel }: { entry: FileEntry; onDone: (v: string) => void; onCancel: () => void }) {
+export function RenameInput({ entry, onDone, onCancel }: { entry: FileEntry; onDone: (v: string) => void; onCancel: () => void }) {
   const ref = useRef<HTMLInputElement>(null)
   const done = useRef(false)
   useEffect(() => {
@@ -628,9 +640,9 @@ function Thumb({ entry, size }: { entry: FileEntry; size: number }) {
   return <span className="thumb icon"><FileIcon entry={entry} size={Math.round(size * 0.62)} /></span>
 }
 
-type MenuItem = { label: string; icon?: React.ReactNode; hint?: string; run: () => void } | 'sep' | false | null | undefined
+export type MenuItem = { label: string; icon?: React.ReactNode; hint?: string; run: () => void } | 'sep' | false | null | undefined
 
-function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: x, top: y })
   useEffect(() => {

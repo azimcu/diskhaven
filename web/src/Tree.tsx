@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ChevronRight, HardDrive, Link2, Trash2, Usb } from 'lucide-react'
+import { Archive, ChevronRight, Clock, HardDrive, Link2, Star, Trash2, Usb } from 'lucide-react'
+import { usePlugins } from './plugins'
 import { formatSize } from './format'
 import type { Disk } from './types'
 import { api, folderEntries } from './api'
@@ -8,10 +9,10 @@ import { t } from './strings'
 
 interface Props {
   current: string | null // null = a special page is open
-  special: 'trash' | 'disks' | 'shares' | 'users' | null
+  special: string | null
   version: number
   onOpen: (path: string) => void
-  onOpenSpecial: (view: 'trash' | 'disks' | 'shares') => void
+  onOpenSpecial: (view: 'trash' | 'disks' | 'shares' | 'hideaway') => void
   isAdmin: boolean
   onDropItems: (dest: string, e: React.DragEvent) => void
   storage: { total: number; free: number } | null
@@ -20,15 +21,21 @@ interface Props {
 /** Left navigation pane: folder tree of the NAS (loaded lazily) and the recycle bin. */
 export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin, onDropItems, storage }: Props) {
   // drives, like "This PC": the NAS storage and (for admins) the other disks with their fill level
+  const plugins = usePlugins()
   const [disks, setDisks] = useState<Disk[]>([])
+  const [quick, setQuick] = useState<{ favorites: string[]; recent: string[] }>({ favorites: [], recent: [] })
   useEffect(() => {
-    if (!isAdmin) return
+    if (!plugins.has('quick')) return
+    api.quick().then(setQuick).catch(() => {})
+  }, [version, current, plugins.has('quick')])
+  useEffect(() => {
+    if (!isAdmin || !plugins.has('disks')) return
     let alive = true
     const load = () => api.disks().then(r => alive && setDisks(r.disks)).catch(() => {})
     load()
     const timer = window.setInterval(load, 30000)
     return () => { alive = false; window.clearInterval(timer) }
-  }, [isAdmin, version])
+  }, [isAdmin, version, plugins.has('disks')])
   // expand the path to the current folder automatically
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']))
   useEffect(() => {
@@ -52,6 +59,15 @@ export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin
 
   return (
     <nav className="tree" aria-label="Klasörler">
+      {plugins.has('quick') && quick.favorites.length > 0 && <>
+        <div className="drives-title">Favoriler</div>
+        {quick.favorites.map(p => (
+          <button key={p} className={`tree-row ${current === p ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpen(p)} title={`/${p}`}>
+            <Star size={15} className="ic" strokeWidth={1.5} /> <span className="tree-label">{p.split('/').pop()}</span>
+          </button>
+        ))}
+        <div className="tree-sep" />
+      </>}
       <TreeNode path="" name={t.thisNas} depth={0} root {...{ current, expanded, toggle, onOpen, version, onDropItems }} />
       <div className="tree-sep" />
       <div className="drives" aria-label="Sürücüler">
@@ -66,10 +82,23 @@ export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin
         ))}
       </div>
       <div className="tree-sep" />
-      <button className={`tree-row ${special === 'shares' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('shares')}>
+      {plugins.has('quick') && quick.recent.length > 0 && (
+        <details className="recent">
+          <summary className="tree-row" style={{ paddingLeft: 30 }}><Clock size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">Son kullanılanlar</span></summary>
+          {quick.recent.slice(0, 10).map(p => (
+            <button key={p} className="tree-row" style={{ paddingLeft: 52 }} onClick={() => onOpen(p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '')} title={`/${p}`}>
+              <span className="tree-label">{p.split('/').pop()}</span>
+            </button>
+          ))}
+        </details>
+      )}
+      {plugins.has('sharing') && <button className={`tree-row ${special === 'shares' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('shares')}>
         <Link2 size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.shares}</span>
-      </button>
-      {isAdmin && <button className={`tree-row ${special === 'disks' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('disks')}>
+      </button>}
+      {plugins.has('vault') && <button className={`tree-row ${special === 'hideaway' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('hideaway')}>
+        <Archive size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{plugins.vaultLabel ?? 'Gizli klasör'}</span>
+      </button>}
+      {isAdmin && plugins.has('disks') && <button className={`tree-row ${special === 'disks' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('disks')}>
         <Usb size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.disks}</span>
       </button>}
       <button className={`tree-row ${special === 'trash' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('trash')}>

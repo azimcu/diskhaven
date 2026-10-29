@@ -37,6 +37,11 @@ builder.Services.AddSingleton<FileBrowser>();
 builder.Services.AddSingleton<FileOperations>();
 builder.Services.AddSingleton<UploadCommitter>();
 builder.Services.AddSingleton<Archives>();
+builder.Services.AddSingleton(new PluginStore(configDir));
+builder.Services.AddSingleton(new ActivityLog(configDir));
+builder.Services.AddSingleton(new QuickAccess(configDir));
+builder.Services.AddSingleton(new DiskHaven.Core.Hideaway.HideawayStore(dataRoot));
+builder.Services.AddSingleton<HideawaySessions>();
 builder.Services.AddSingleton<SystemStats>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SystemStats>());
 builder.Services.AddSingleton(new AccountStore(configDir));
@@ -177,8 +182,9 @@ auth.MapPost("/login", async (LoginRequest req, HttpContext ctx, AccountStore ac
     return Results.Ok(new { user = account.UserName });
 }).RequireRateLimiting("login");
 
-auth.MapPost("/logout", async (HttpContext ctx) =>
+auth.MapPost("/logout", async (HttpContext ctx, HideawaySessions hidden) =>
 {
+    if (ctx.User.Identity?.Name is { } name) hidden.LockUser(name);   // signing out also locks the hidden folder
     await ctx.SignOutAsync();
     return Results.NoContent();
 });
@@ -208,19 +214,19 @@ files.MapGet("/content", (string path, bool? download, HttpContext ctx, FileBrow
 }));
 
 files.MapPost("/folder", (FolderRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { path = ops.CreateFolder(req.Parent, req.Name) })));
+    Guard(() => Results.Ok(new { path = ops.CreateFolder(req.Parent, req.Name) }))).LogsActivity("folder");
 
 files.MapPost("/rename", (RenameRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { path = ops.Rename(req.Path, req.NewName) })));
+    Guard(() => Results.Ok(new { path = ops.Rename(req.Path, req.NewName) }))).LogsActivity("rename");
 
 files.MapPost("/move", (TransferRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { paths = ops.Move(req.Paths, req.Destination) })));
+    Guard(() => Results.Ok(new { paths = ops.Move(req.Paths, req.Destination) }))).LogsActivity("move");
 
 files.MapPost("/copy", (TransferRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { paths = ops.Copy(req.Paths, req.Destination) })));
+    Guard(() => Results.Ok(new { paths = ops.Copy(req.Paths, req.Destination) }))).LogsActivity("copy");
 
 files.MapPost("/delete", (DeleteRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { items = ops.Delete(req.Paths) })));
+    Guard(() => Results.Ok(new { items = ops.Delete(req.Paths) }))).LogsActivity("delete");
 
 files.MapGet("/search", (string? path, string q, FileBrowser browser, CancellationToken ct) => Guard(() =>
 {
@@ -240,7 +246,7 @@ files.MapPost("/hidden", (HiddenRequest req, VaultRoot vault, FileBrowser browse
         HiddenFlag.Set(full, req.Hidden);
     }
     return Results.NoContent();
-}));
+})).LogsActivity("hide");
 
 files.MapGet("/properties", (string path, FileBrowser browser) => Guard(() => Results.Ok(browser.Properties(path))));
 
@@ -259,16 +265,16 @@ files.MapPost("/compress", (CompressRequest req, Archives archives, VaultRoot va
     if (demo.Enabled && DemoOptions.FolderBytes(vault.FullPath) >= demo.MaxTotalBytes)
         throw new IOException("Demo storage is full.");
     return Results.Ok(new { path = archives.Compress(req.Paths, req.Name) });
-}));
+})).RequiresPlugin("archive").LogsActivity("compress");
 
 files.MapPost("/extract", (ExtractRequest req, Archives archives, VaultRoot vault) => Guard(() =>
 {
     var free = demo.Enabled ? Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(vault.FullPath)) : new DriveInfo(vault.FullPath).AvailableFreeSpace;
     return Results.Ok(new { path = archives.Extract(req.Path, free) });
-}));
+})).RequiresPlugin("archive").LogsActivity("extract");
 
 files.MapGet("/zip-list", (string path, Archives archives) =>
-    Guard(() => Results.Ok(archives.List(path).Select(e => new { name = e.Name, size = e.Size }))));
+    Guard(() => Results.Ok(archives.List(path).Select(e => new { name = e.Name, size = e.Size })))).RequiresPlugin("archive");
 
 // several items or a folder as one ZIP download, built while it is sent (nothing is stored)
 files.MapGet("/archive", async (string[] paths, string? name, HttpContext ctx, Archives archives, VaultRoot vault) =>
@@ -283,10 +289,10 @@ files.MapGet("/archive", async (string[] paths, string? name, HttpContext ctx, A
     try { await Task.Run(() => archives.WriteTo(ctx.Response.Body, paths, ctx.RequestAborted)); }
     catch (Exception e) when (e is FileNotFoundException or OperationCanceledException or IOException) { }
     return Results.Empty;
-});
+}).RequiresPlugin("archive");
 
 // ---- system: live numbers for the corner gauge -----------------------------------------
-app.MapGet("/api/system/stats", (SystemStats stats) => Results.Ok(stats.Last)).RequireAuthorization();
+app.MapGet("/api/system/stats", (SystemStats stats) => Results.Ok(stats.Last)).RequireAuthorization().RequiresPlugin("gauge");
 
 app.MapGet("/api/storage", (VaultRoot vault) =>
 {
@@ -300,8 +306,8 @@ app.MapGet("/api/storage", (VaultRoot vault) =>
 // ---- recycle bin ------------------------------------------------------------------------
 var trash = app.MapGroup("/api/trash").RequireAuthorization().AddEndpointFilter(Telemetry.CountFileOperation);
 trash.MapGet("/", (FileOperations ops) => Results.Ok(ops.ListTrash()));
-trash.MapPost("/{id}/restore", (string id, FileOperations ops) => Guard(() => Results.Ok(new { path = ops.Restore(id) })));
-trash.MapDelete("/{id}", (string id, FileOperations ops) => Guard(() => { ops.Purge(id); return Results.NoContent(); }));
+trash.MapPost("/{id}/restore", (string id, FileOperations ops) => Guard(() => Results.Ok(new { path = ops.Restore(id) }))).LogsActivity("restore");
+trash.MapDelete("/{id}", (string id, FileOperations ops) => Guard(() => { ops.Purge(id); return Results.NoContent(); })).LogsActivity("purge");
 trash.MapDelete("/", (FileOperations ops) =>
 {
     foreach (var item in ops.ListTrash())
@@ -310,7 +316,7 @@ trash.MapDelete("/", (FileOperations ops) =>
 });
 
 // ---- share links ------------------------------------------------------------------------
-var sharesApi = app.MapGroup("/api/shares").RequireAuthorization();
+var sharesApi = app.MapGroup("/api/shares").RequireAuthorization().RequiresPlugin("sharing");
 sharesApi.MapGet("/", (ShareStore shares) => Results.Ok(shares.List()));
 sharesApi.MapPost("/", (ShareRequest req, ClaimsPrincipal user, ShareStore shares, VaultRoot vault) => Guard(() =>
 {
@@ -319,11 +325,11 @@ sharesApi.MapPost("/", (ShareRequest req, ClaimsPrincipal user, ShareStore share
         : throw new FileNotFoundException("Item not found.");
     TimeSpan? life = req.Days is > 0 ? TimeSpan.FromDays(req.Days.Value) : null;
     return Results.Ok(shares.Create(req.Path, kind, user.Identity!.Name!, life));
-}));
-sharesApi.MapDelete("/{id}", (string id, ShareStore shares) => Guard(() => { shares.Revoke(id); return Results.NoContent(); }));
+})).LogsActivity("share");
+sharesApi.MapDelete("/{id}", (string id, ShareStore shares) => Guard(() => { shares.Revoke(id); return Results.NoContent(); })).LogsActivity("unshare");
 
 // public side of a link: no login, read-only, only the shared item and what is inside it
-var publicApi = app.MapGroup("/api/public/{token}").RequireRateLimiting("public");
+var publicApi = app.MapGroup("/api/public/{token}").RequireRateLimiting("public").RequiresPlugin("sharing");
 publicApi.MapGet("/", (string token, string? path, ShareStore shares, FileBrowser browser, VaultRoot vault) => Guard(() =>
 {
     var share = shares.Find(token) ?? throw new KeyNotFoundException("This link has expired or was removed.");
@@ -376,7 +382,7 @@ usersApi.MapPost("/{name}/password", (string name, ResetPasswordRequest req, Acc
 });
 
 // ---- disks and sync (admin) -----------------------------------------------------------
-var disksApi = app.MapGroup("/api/disks").RequireAuthorization("admin");
+var disksApi = app.MapGroup("/api/disks").RequireAuthorization("admin").RequiresPlugin("disks");
 
 disksApi.MapGet("/", async (DiskAgentClient agent, DiskService disks, SyncJobRunner runner, CancellationToken ct) =>
     demo.Enabled ? Results.Ok(new { agent = false, demo = true, disks = Array.Empty<DiskView>(), job = (SyncJob?)null }) :
@@ -428,8 +434,63 @@ disksApi.MapPost("/{id}/plan", (string id, DiskService disks, DiskSettingsStore 
     }));
 disksApi.MapPost("/{id}/sync", (string id, SyncJobRunner runner) => Guard(() => Results.Ok(runner.Start(id))));
 
-app.MapGet("/api/sync/job", (SyncJobRunner runner) => Results.Ok(runner.Current)).RequireAuthorization("admin");
-app.MapPost("/api/sync/job/cancel", (SyncJobRunner runner) => { runner.Cancel(); return Results.NoContent(); }).RequireAuthorization("admin");
+app.MapGet("/api/sync/job", (SyncJobRunner runner) => Results.Ok(runner.Current)).RequireAuthorization("admin").RequiresPlugin("disks");
+app.MapPost("/api/sync/job/cancel", (SyncJobRunner runner) => { runner.Cancel(); return Results.NoContent(); }).RequireAuthorization("admin").RequiresPlugin("disks");
+
+// ---- plugins, quick access, admin panel ---------------------------------------------------
+var startedAt = DateTimeOffset.UtcNow;
+var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
+app.MapGet("/api/plugins", (ClaimsPrincipal user, PluginStore plugins) => Results.Ok(new
+{
+    installed = plugins.Installed,
+    vaultLabel = plugins.IsInstalled("vault") ? HideawayEndpoints.LabelOf(plugins, user.Identity!.Name!) : null,
+})).RequireAuthorization();
+
+var quick = app.MapGroup("/api/quick").RequireAuthorization().RequiresPlugin("quick");
+quick.MapGet("/", (ClaimsPrincipal u, QuickAccess q) => { var (f, r) = q.Get(QuickAccess.Name(u)); return Results.Ok(new { favorites = f, recent = r }); });
+quick.MapPost("/favorite", (QuickRequest req, ClaimsPrincipal u, QuickAccess q) => Guard(() =>
+{
+    var path = VaultRoot.Normalize(req.Path);
+    q.Change(QuickAccess.Name(u), (fav, _) => { fav.Remove(path); if (req.On) fav.Add(path); });
+    return Results.NoContent();
+}));
+quick.MapPost("/recent", (QuickRequest req, ClaimsPrincipal u, QuickAccess q) => Guard(() =>
+{
+    var path = VaultRoot.Normalize(req.Path);
+    q.Change(QuickAccess.Name(u), (_, rec) => { rec.Remove(path); rec.Insert(0, path); if (rec.Count > 20) rec.RemoveRange(20, rec.Count - 20); });
+    return Results.NoContent();
+}));
+
+var admin = app.MapGroup("/api/admin").RequireAuthorization("admin");
+admin.MapGet("/overview", (VaultRoot vault, AccountStore accounts, SystemStats stats, PluginStore plugins, ShareStore shares, FileOperations ops) =>
+{
+    var drive = new DriveInfo(vault.FullPath);
+    return Results.Ok(new
+    {
+        version, startedAt, demo = demo.Enabled,
+        storage = demo.Enabled
+            ? new { total = demo.MaxTotalBytes, free = Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(vault.FullPath)) }
+            : new { total = drive.TotalSize, free = drive.AvailableFreeSpace },
+        users = accounts.List().Count, shares = shares.List().Count, trash = ops.ListTrash().Count,
+        plugins = plugins.Installed.Count, system = stats.Last,
+        dotnet = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+        os = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+    });
+});
+admin.MapGet("/plugins", (PluginStore plugins) => Results.Ok(PluginCatalog.All.Select(p => new
+{
+    p.Id, p.Name, p.Description, p.Category, p.Version, p.Features, installed = plugins.IsInstalled(p.Id),
+})));
+admin.MapPost("/plugins/{id}", (string id, PluginToggle req, PluginStore plugins) => Guard(() =>
+{
+    plugins.SetInstalled(id, req.Installed);
+    return Results.NoContent();
+}));
+admin.MapGet("/activity", (string? q, string? user, string? action, int? limit, ActivityLog log) =>
+    Results.Ok(log.Query(q, user, action, limit ?? 200))).RequiresPlugin("activity");
+
+HideawayEndpoints.Map(app, uploadDir, demo);
 
 // ---- uploads: tus protocol for resumable chunks, then a verified commit ----------------
 app.MapTus("/api/tus", _ => Task.FromResult(new DefaultTusConfiguration
@@ -483,7 +544,7 @@ app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, Upl
     }
     catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: 400); }
     catch (DirectoryNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
-}).RequireAuthorization();
+}).RequireAuthorization().LogsActivity("upload");
 
 // single-page app: unknown non-API paths serve index.html
 app.MapFallback(async ctx =>
@@ -564,6 +625,8 @@ record DeleteRequest(string[] Paths);
 record HiddenRequest(string[] Paths, bool Hidden);
 record CompressRequest(string[] Paths, string? Name);
 record ExtractRequest(string Path);
+record QuickRequest(string Path, bool On = true);
+record PluginToggle(bool Installed);
 record AdoptRequest(string Name);
 record DiskSettingsRequest(string? Name, string[]? Folders, SyncSchedule? Schedule, AfterSync? After);
 record ShareRequest(string Path, int? Days);

@@ -9,7 +9,7 @@ import type { FileEntry } from './types'
 /** Shows a file's content: image, video, audio, PDF or the start of a text file. */
 export function PreviewBody({ entry }: { entry: FileEntry }) {
   const kind = previewKind(entry.extension)
-  const url = api.contentUrl(entry.path)
+  const url = entry.src ?? api.contentUrl(entry.path)
   const [text, setText] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
 
@@ -82,7 +82,7 @@ export function PreviewModal({ entry, onClose, onPrev, onNext }: { entry: FileEn
     <div className="viewer" onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <header className="viewer-bar">
         <span className="viewer-name">{entry.name}</span>
-        <a className="icon-btn" href={api.contentUrl(entry.path, true)} title={t.download}><Download size={18} /></a>
+        <a className="icon-btn" href={entry.downloadSrc ?? api.contentUrl(entry.path, true)} title={t.download}><Download size={18} /></a>
         <button className="icon-btn" onClick={onClose} title={t.close}><X size={18} /></button>
       </header>
       {onPrev && <button className="viewer-nav prev" onClick={onPrev} aria-label="Önceki">‹</button>}

@@ -8,6 +8,9 @@ export interface FileEntry {
   modified: string
   extension: string | null
   hidden: boolean
+  /** set for items that do not live in the NAS tree (hidden folder): where to load the content from */
+  src?: string
+  downloadSrc?: string
   /** folders only: recursive totals, null while being calculated */
   files?: number | null
   folders?: number | null
@@ -92,3 +95,11 @@ export interface SystemSample {
   at: string; cpu: number | null; memUsed: number | null; memTotal: number | null; temperature: number | null
   readPerSec: number | null; writePerSec: number | null; cpuHistory: number[]
 }
+
+export interface PluginInfo { id: string; name: string; description: string; category: string; version: string; features: string[]; installed: boolean }
+export interface AdminOverview {
+  version: string; startedAt: string; demo: boolean; storage: { total: number; free: number }; users: number; shares: number; trash: number
+  plugins: number; system: SystemSample; dotnet: string; os: string
+}
+export interface ActivityItem { at: string; user: string; action: string; paths: string[]; detail: string | null; ip: string | null }
+export interface HideawayState { setUp: boolean; unlocked: boolean; label: string; suggestions: string[]; idleMinutes: number }

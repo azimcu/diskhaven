@@ -14,7 +14,7 @@ public sealed record SyncPlanSummary(int CreateFolders, int Copy, int Update, in
 
 /// <summary>Runs one sync at a time in the background and keeps its live state for the UI.</summary>
 public sealed class SyncJobRunner(DiskService disks, DiskSettingsStore settings, VaultRoot vault, TimeProvider clock,
-    ILogger<SyncJobRunner> log)
+    ILogger<SyncJobRunner> log, PluginStore plugins)
 {
     private readonly Lock _lock = new();
     private SyncJob? _job;
@@ -78,6 +78,19 @@ public sealed class SyncJobRunner(DiskService disks, DiskSettingsStore settings,
             Set(j => j with { Phase = "copy" });
             var progress = new Progress<SyncProgress>(p => Set(j => j with { Progress = p }));
             var report = await new SyncExecutor(clock).ExecuteAsync(plan, vault.FullPath, root, progress, ct);
+            // the hidden folder goes along as it is on disk: encrypted, unreadable without its password or recovery key
+            // (<disk>/.diskhaven-data/hideaway; the recovery tool opens it from there)
+            var internalDir = Path.Combine(vault.FullPath, VaultRoot.InternalFolderName);
+            if (!report.Canceled && plugins.IsInstalled("vault") && Directory.Exists(Path.Combine(internalDir, "hideaway")))
+            {
+                Set(j => j with { Phase = "copy-hidden" });
+                var target = Path.Combine(root, ".diskhaven-data");
+                Directory.CreateDirectory(target);
+                var hidden = await Task.Run(() => SyncPlanner.Plan(internalDir, ["hideaway"], target, ct), ct);
+                var extra = await new SyncExecutor(clock).ExecuteAsync(hidden, internalDir, target, new Progress<SyncProgress>(_ => { }), ct);
+                if (extra.Errors.Count > 0)
+                    log.LogWarning("Hidden folder copy to {Disk}: {Errors} errors", s.Name, extra.Errors.Count);
+            }
             settings.AddReport(s.FsId, report);
             var message = report.Canceled ? "İptal edildi" : report.Errors.Count > 0 ? $"{report.Errors.Count} dosyada hata" : null;
             settings.Update(s.FsId, x => x with

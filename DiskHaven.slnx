@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/DiskHaven.Api/DiskHaven.Api.csproj" />
     <Project Path="src/DiskHaven.Core/DiskHaven.Core.csproj" />
+    <Project Path="src/DiskHaven.Recover/DiskHaven.Recover.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/DiskHaven.Api.Tests/DiskHaven.Api.Tests.csproj" />

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, LogOut, Menu as MenuIcon, Moon, Sun, UserCircle2, Users } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { KeyRound, LogOut, Menu as MenuIcon, Moon, ShieldCheck, Sun, UserCircle2 } from 'lucide-react'
 import { effectiveTheme, onDeviceThemeChange, pickTheme, savedTheme, type Theme } from './theme'
 import { api } from './api'
 import { promptDialog, toast, toastError, Toasts } from './dialogs'
@@ -8,19 +8,25 @@ import { Login } from './Login'
 import { t } from './strings'
 import { Transfers } from './Transfers'
 import { TrashView } from './TrashView'
-import { DisksView } from './DisksView'
-import { SharesView, UsersView } from './Sharing'
+import { loadPlugins, usePlugins } from './plugins'
 import { Tree } from './Tree'
 import type { AuthState } from './types'
 import { filesFromDrop, uploads } from './uploads'
 
+// Plugin screens are separate chunks: a plugin that is not installed is never downloaded.
+const DisksView = lazy(() => import('./DisksView').then(m => ({ default: m.DisksView })))
+const SharesView = lazy(() => import('./Sharing').then(m => ({ default: m.SharesView })))
+const AdminPanel = lazy(() => import('./Admin'))
+const HideawayView = lazy(() => import('./Hideaway'))
+
 // Location lives in the URL hash (#/files/Belgeler/Okul, #/trash) so browser back/forward and reload work.
-type Special = 'trash' | 'disks' | 'shares' | 'users'
+type Special = 'trash' | 'disks' | 'shares' | 'users' | 'admin' | 'hideaway'
 type Route = { view: 'files'; path: string } | { view: Special }
 
 function parseHash(): Route {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''))
-  if (h === 'trash' || h === 'disks' || h === 'shares' || h === 'users') return { view: h }
+  if (h === 'trash' || h === 'disks' || h === 'shares' || h === 'hideaway') return { view: h }
+  if (h === 'users' || h.startsWith('admin')) return { view: 'admin' }
   return { view: 'files', path: h.startsWith('files') ? h.slice(5).replace(/^\/+|\/+$/g, '') : '' }
 }
 
@@ -52,7 +58,8 @@ export function App() {
     setVersion(v => v + 1)
     api.storage().then(setStorage).catch(() => {})
   }, [])
-  useEffect(() => { if (auth?.user) changed() }, [auth?.user, changed])
+  useEffect(() => { if (auth?.user) { changed(); void loadPlugins() } }, [auth?.user, changed])
+  const plugins = usePlugins()
 
   const navigate = useCallback((path: string) => { location.hash = hashFor(path) }, [])
 
@@ -111,7 +118,7 @@ export function App() {
             <>
               <div className="menu-backdrop" onMouseDown={() => setUserMenu(false)} />
               <div className="menu user-menu">
-                {auth.isAdmin && <button className="menu-item" onClick={() => { setUserMenu(false); location.hash = '#/users' }}><span className="menu-ic"><Users size={16} /></span>{t.users}</button>}
+                {auth.isAdmin && <button className="menu-item" onClick={() => { setUserMenu(false); location.hash = '#/admin' }}><span className="menu-ic"><ShieldCheck size={16} /></span>Yönetim paneli</button>}
                 <button className="menu-item" onClick={changePassword}><span className="menu-ic"><KeyRound size={16} /></span>{t.changePassword}</button>
                 <button className="menu-item" onClick={logout}><span className="menu-ic"><LogOut size={16} /></span>{t.logout}</button>
               </div>
@@ -126,13 +133,17 @@ export function App() {
             isAdmin={!!auth.isAdmin} onDropItems={onDropItems} storage={storage} />
         </div>
         {drawer && <div className="side-backdrop" onClick={() => setDrawer(false)} />}
+        <Suspense fallback={<div className="main-col"><div className="loading"><span className="spinner" /></div></div>}>
         {route.view === 'files'
           ? <Explorer path={route.path} version={version} clipboard={clipboard} setClipboard={setClipboard}
               navigate={navigate} changed={changed} onDropItems={onDropItems} storage={storage} />
           : route.view === 'trash' ? <TrashView onChanged={changed} />
-          : route.view === 'shares' ? <SharesView />
-          : route.view === 'users' && auth.isAdmin ? <UsersView me={auth.user} />
-          : auth.isAdmin ? <DisksView onChanged={changed} /> : null}
+          : route.view === 'shares' && plugins.has('sharing') ? <SharesView />
+          : route.view === 'hideaway' && plugins.has('vault') ? <HideawayView />
+          : route.view === 'admin' && auth.isAdmin ? <AdminPanel me={auth.user} />
+          : route.view === 'disks' && auth.isAdmin && plugins.has('disks') ? <DisksView onChanged={changed} />
+          : plugins.loaded ? <div className="main-col"><p className="empty-note">Bu bölüm kurulu değil.</p></div> : null}
+        </Suspense>
       </div>
       <Transfers />
       <Toasts />

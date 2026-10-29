@@ -1,4 +1,4 @@
-import type { AfterSync, AuthState, Disk, FileEntry, ItemProperties, Listing, SystemSample, PublicItem, Share, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
+import type { ActivityItem, AdminOverview, AfterSync, AuthState, Disk, FileEntry, HideawayState, ItemProperties, Listing, PluginInfo, SystemSample, PublicItem, Share, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
 import { translateServerMessage } from './strings'
 
 export class ApiError extends Error {
@@ -101,6 +101,36 @@ export const api = {
   archiveUrl: (paths: string[], name?: string) =>
     `/api/files/archive?${paths.map(p => `paths=${q(p)}`).join('&')}${name ? `&name=${q(name)}` : ''}`,
   systemStats: () => request<SystemSample>('GET', '/api/system/stats'),
+  plugins: () => request<{ installed: string[]; vaultLabel: string | null }>('GET', '/api/plugins'),
+  quick: () => request<{ favorites: string[]; recent: string[] }>('GET', '/api/quick'),
+  favorite: (path: string, on: boolean) => request<void>('POST', '/api/quick/favorite', { path, on }),
+  recent: (path: string) => request<void>('POST', '/api/quick/recent', { path }),
+
+  adminOverview: () => request<AdminOverview>('GET', '/api/admin/overview'),
+  adminPlugins: () => request<PluginInfo[]>('GET', '/api/admin/plugins'),
+  setPlugin: (id: string, installed: boolean) => request<void>('POST', `/api/admin/plugins/${encodeURIComponent(id)}`, { installed }),
+  activity: (q: string, user: string, action: string) =>
+    request<ActivityItem[]>('GET', `/api/admin/activity?limit=300${q ? `&q=${encodeURIComponent(q)}` : ''}${user ? `&user=${encodeURIComponent(user)}` : ''}${action ? `&action=${action}` : ''}`),
+
+  hideaway: {
+    state: () => request<HideawayState>('GET', '/api/hideaway/state'),
+    setup: (password: string, decoyPassword: string | null) => request<{ recoveryKey: string }>('POST', '/api/hideaway/setup', { password, decoyPassword }),
+    unlock: (password: string) => request<void>('POST', '/api/hideaway/unlock', { password }),
+    lock: () => request<void>('POST', '/api/hideaway/lock'),
+    list: (folder: string) => request<{ path: { id: string; name: string }[]; entries: FileEntry[] }>('GET', `/api/hideaway/list?folder=${encodeURIComponent(folder)}`),
+    createFolder: (parent: string, name: string) => request<FileEntry>('POST', '/api/hideaway/folder', { parent, name }),
+    rename: (id: string, name: string) => request<FileEntry>('POST', '/api/hideaway/rename', { id, name }),
+    move: (ids: string[], parent: string) => request<void>('POST', '/api/hideaway/move', { ids, parent }),
+    copy: (ids: string[], parent: string) => request<void>('POST', '/api/hideaway/copy', { ids, parent }),
+    remove: (ids: string[]) => request<void>('POST', '/api/hideaway/delete', { ids, parent: null }),
+    password: (currentPassword: string, newPassword: string) => request<void>('POST', '/api/hideaway/password', { currentPassword, newPassword }),
+    decoy: (decoyPassword: string, currentPassword: string) => request<void>('POST', '/api/hideaway/decoy', { decoyPassword, currentPassword }),
+    label: (label: string) => request<void>('PUT', '/api/hideaway/label', { label }),
+    commit: (uploadId: string, parent: string, relativeName: string, sha256: string, lastModified: number) =>
+      request<FileEntry>('POST', '/api/hideaway/commit', { uploadId, parent, relativeName, sha256, lastModified }),
+    contentUrl: (id: string, download = false) => `/api/hideaway/content?id=${encodeURIComponent(id)}${download ? '&download=true' : ''}`,
+    archiveUrl: (ids: string[]) => `/api/hideaway/archive?${ids.map(i => `ids=${encodeURIComponent(i)}`).join('&')}`,
+  },
 
   contentUrl: (path: string, download = false) => `/api/files/content?path=${q(path)}${download ? '&download=true' : ''}`,
 }

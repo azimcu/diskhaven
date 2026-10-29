@@ -25,3 +25,10 @@ yan yana çalışmak için tasarlanmıştır.
 
 Geliştirme adımları ve ayrıntılar için [README.md](README.md),
 [docs/architecture.md](docs/architecture.md) ve [docs/roadmap.md](docs/roadmap.md).
+
+## Eklentiler
+
+**Eklentiler** (yönetim panelindeki mağazadan kurulur, veri kaybı olmadan kaldırılır; kurulu olmayan eklentinin kodu tarayıcıya hiç inmez):
+ZIP arşivleri · Paylaşım bağlantıları · Diskler ve yedekleme · Sunucu göstergesi · Hızlı erişim (favoriler, son kullanılanlar) · Etkinlik günlüğü ·
+**Gizli klasör**: parolayla açılan, şifreli, ayrı bir klasör ağacı; menüde dikkat çekmeyen bir adla görünür; kurtarma anahtarı, yem parolası, yedek disklere şifreli kopya ve çevrimdışı kurtarma aracı ([biçim](docs/hideaway.md)).
+

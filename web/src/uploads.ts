@@ -132,7 +132,10 @@ async function run(id: number) {
     const uploadId = await tusUpload(item, p => update(id, { progress: p }))
     if (canceled(id)) return
     update(id, { status: 'verifying', progress: 0 })
-    const result = await api.commitUpload(uploadId, item.destination, item.relativeName, sha256, item.file.lastModified)
+    // "hideaway:<folder id>" uploads go into the hidden folder, encrypted on commit
+    const result = item.destination.startsWith('hideaway:')
+      ? await api.hideaway.commit(uploadId, item.destination.slice(9), item.relativeName, sha256, item.file.lastModified)
+      : await api.commitUpload(uploadId, item.destination, item.relativeName, sha256, item.file.lastModified)
     update(id, { status: 'done', progress: 1, resultPath: result.path })
     uploadEvents.dispatchEvent(new CustomEvent('committed', { detail: item.destination }))
   } catch (e) {
@@ -169,7 +172,8 @@ function tusUpload(item: UploadItem, onProgress: (p: number) => void): Promise<s
       chunkSize: CHUNK,
       retryDelays: [0, 1000, 3000, 5000, 10000, 20000, 30000, 60000],
       headers: csrfHeader,
-      metadata: { filename: item.relativeName, destination: item.destination },
+      // a hidden-folder upload leaves no real name in the server's temporary upload files
+      metadata: item.destination.startsWith('hideaway:') ? { filename: 'file', destination: 'x' } : { filename: item.relativeName, destination: item.destination },
       // same file into the same place -> continue the earlier, interrupted upload
       fingerprint: async () =>
         ['diskhaven', item.destination, item.relativeName, item.file.size, item.file.lastModified].join('|'),
