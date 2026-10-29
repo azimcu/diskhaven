@@ -7,7 +7,7 @@ namespace DiskHaven.Core.Hideaway;
 /// <summary>
 /// Cryptography of the hidden folder. Format (also read by the offline recovery tool, see docs/hideaway.md):
 /// <list type="bullet">
-/// <item><b>slots.bin</b>: <see cref="SlotCount"/> fixed-size slots. A used slot holds the vault's 256-bit master key
+/// <item><b>slots.bin</b>: <see cref="SlotCount"/> fixed-size slots (8 × 136 bytes). A used slot holds the vault's 256-bit master key
 /// wrapped twice with AES-256-GCM: once under PBKDF2-SHA256(password, 600 000 rounds) and once under the recovery key
 /// (HKDF). An unused slot is random bytes of the same size, so nobody can tell how many slots are in use.</item>
 /// <item><b>blobs</b>: every file and the folder index are separate encrypted objects with random names. A blob is
@@ -18,7 +18,7 @@ namespace DiskHaven.Core.Hideaway;
 /// </summary>
 public static class HideawayCrypto
 {
-    public const int SlotCount = 3;
+    public const int SlotCount = 8;
     public const int Pbkdf2Rounds = 600_000;
     private const int KeySize = 32, SaltSize = 16, NonceSize = 12, TagSize = 16;
     private const int WrapSize = NonceSize + KeySize + TagSize;                 // 60

@@ -97,6 +97,27 @@ public sealed class HideawayTests : IDisposable
     }
 
     [Fact]
+    public void Nested_decoys_never_reach_the_real_vault_before_the_slots_run_out()
+    {
+        var (_, real) = _store.Setup("azim", "gercek-parola", null);
+        var secret = real.AddFile(null, "a.txt", Plain("gerçek"), null);
+        real.SetDecoy("yem-0-parola", "gercek-parola");
+        var current = "yem-0-parola";
+        // each decoy sets its own decoy, as an attacker holding the decoy password could
+        for (var i = 1; i < HideawayCrypto.SlotCount - 1; i++)
+        {
+            var v = _store.Open("azim", current)!;
+            Assert.Empty(v.Children(null));
+            v.SetDecoy($"yem-{i}-parola", current);
+            current = $"yem-{i}-parola";
+            Assert.Equal("gerçek", Read(_store.Open("azim", "gercek-parola")!, secret.Id));
+        }
+        // every vault, real or decoy, lists the same number of slots
+        Assert.Equal(HideawayCrypto.SlotCount - 1, _store.Open("azim", current)!.Index.Chain.Count);
+        Assert.Equal(HideawayCrypto.SlotCount - 1, _store.Open("azim", "gercek-parola")!.Index.Chain.Count);
+    }
+
+    [Fact]
     public void Operations_keep_the_tree_consistent()
     {
         var (_, v) = _store.Setup("azim", "gercek-parola", null);

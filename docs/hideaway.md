@@ -8,7 +8,7 @@ internal `.diskhaven` folder, which every path check rejects.
 
 `<data>/.diskhaven/hideaway/<user id>/` contains
 
-- `slots.bin`: exactly 3 × 136 random-looking bytes, always the same size
+- `slots.bin`: exactly 8 × 136 random-looking bytes, always the same size
 - `blobs/xx/<32 hex>`: encrypted objects with random names (files and folder indexes)
 
 No file names, folder names, sizes per file or counts per vault are stored in the clear.
@@ -25,11 +25,12 @@ Unused slots are random bytes, so nobody can tell whether a decoy exists.
 
 ## Decoy
 
-A decoy password opens a second, independent vault in another slot. Every vault knows
-one slot it may use for its own decoy, chosen by whoever created it and never pointing at
-itself or at its creator — so "set decoy password" works the same in a real vault and in a
-decoy, and setting it from a decoy can never overwrite the real vault. The recovery key
-opens only the real vault.
+A decoy password opens a second, independent vault in another slot. Every vault's index
+holds an ordered list of all the other slots (`Chain`): its decoy goes into `Chain[0]`, and
+that decoy gets `Chain[1..] + [creator's slot]`. Real vaults and decoys therefore look the
+same (same list length, a random-looking order), and "set decoy password" works the same in
+both. A vault's ancestors sit at the end of its list, so decoys would have to be nested
+7 deep before one could overwrite the real vault. The recovery key opens only the real vault.
 
 ## Blobs
 

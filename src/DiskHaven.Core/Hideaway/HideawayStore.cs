@@ -10,9 +10,13 @@ public sealed record HideawayNode(string Id, string? Parent, string Name, bool F
 public sealed class HideawayIndex
 {
     public int Version { get; set; } = 1;
-    /// <summary>Slot this vault may put its own decoy into. Chosen by whoever created this vault, never its own slot
-    /// and never the slot of the vault that created it, so setting a decoy can never overwrite another vault.</summary>
-    public int? DecoySlot { get; set; }
+    /// <summary>
+    /// The slots this vault's decoys go into, in order: its own decoy uses <c>Chain[0]</c>, and that decoy gets
+    /// <c>Chain[1..] + [this slot]</c>. Every vault has a list of all the other slots, so a real vault and a decoy look
+    /// the same, and a vault's ancestors sit at the end of its list: a chain of decoys would have to be nested
+    /// <see cref="HideawayCrypto.SlotCount"/> - 1 deep before one could overwrite the real vault.
+    /// </summary>
+    public List<int> Chain { get; set; } = [];
     public Dictionary<string, HideawayNode> Nodes { get; set; } = [];
 }
 
@@ -63,18 +67,19 @@ public sealed class HideawayStore
         if (IsSetUp(user)) throw new InvalidOperationException("The hidden folder is already set up.");
         Directory.CreateDirectory(Path.Combine(Dir(user), "blobs"));
         var slots = Enumerable.Range(0, HideawayCrypto.SlotCount).Select(_ => HideawayCrypto.RandomSlot()).ToArray();
-        var order = Enumerable.Range(0, HideawayCrypto.SlotCount).OrderBy(_ => RandomNumberGenerator.GetInt32(1000)).ToArray();
-        var (mine, decoy, spare) = (order[0], order[1], order[2]);
+        var order = Enumerable.Range(0, HideawayCrypto.SlotCount).OrderBy(_ => RandomNumberGenerator.GetInt32(int.MaxValue)).ToList();
+        var mine = order[0];
         var master = HideawayCrypto.NewKey();
         var recovery = HideawayCrypto.NewKey();
         slots[mine] = HideawayCrypto.MakeSlot(master, password, recovery);
-        var vault = new Opened(this, user, mine, master, new HideawayIndex { DecoySlot = decoy });
+        var vault = new Opened(this, user, mine, master, new HideawayIndex { Chain = order[1..] });
         if (decoyPassword is not null)
         {
+            var (dSlot, dIndex) = DecoyOf(vault.Index, mine);
             var dMaster = HideawayCrypto.NewKey();
             // own random recovery half: the user's recovery key always opens the real vault, never the decoy
-            slots[decoy] = HideawayCrypto.MakeSlot(dMaster, decoyPassword, HideawayCrypto.NewKey());
-            new Opened(this, user, decoy, dMaster, new HideawayIndex { DecoySlot = spare }).SaveIndex();
+            slots[dSlot] = HideawayCrypto.MakeSlot(dMaster, decoyPassword, HideawayCrypto.NewKey());
+            new Opened(this, user, dSlot, dMaster, dIndex).SaveIndex();
         }
         WriteSlots(user, slots);
         vault.SaveIndex();
@@ -88,15 +93,12 @@ public sealed class HideawayStore
         if (!IsSetUp(user)) return null;
         var slots = ReadSlots(user);
         var recovery = HideawayCrypto.ParseRecoveryKey(secret);
-        Opened? found = null;
-        for (var i = 0; i < slots.Length; i++)
-        {
-            var master = HideawayCrypto.OpenWithPassword(slots[i], secret)
-                         ?? (recovery is null ? null : HideawayCrypto.OpenWithRecoveryKey(slots[i], recovery));
-            if (master is not null && found is null)
-                found = new Opened(this, user, i, master, LoadIndex(user, master));
-        }
-        return found;
+        // all slots in parallel: about one key derivation of wall time, and always the same work
+        var keys = new byte[]?[slots.Length];
+        Parallel.For(0, slots.Length, i => keys[i] = HideawayCrypto.OpenWithPassword(slots[i], secret)
+            ?? (recovery is null ? null : HideawayCrypto.OpenWithRecoveryKey(slots[i], recovery)));
+        var hit = Array.FindIndex(keys, k => k is not null);
+        return hit < 0 ? null : new Opened(this, user, hit, keys[hit]!, LoadIndex(user, keys[hit]!));
     }
 
     private HideawayIndex LoadIndex(string user, byte[] master)
@@ -137,6 +139,13 @@ public sealed class HideawayStore
     }
 
     internal byte[] ReadSlot(string user, int index) => ReadSlots(user)[index];
+
+    /// <summary>Slot and fresh index for the decoy of a vault in <paramref name="slot"/> (see <see cref="HideawayIndex.Chain"/>).</summary>
+    internal static (int Slot, HideawayIndex Index) DecoyOf(HideawayIndex parent, int slot)
+    {
+        if (parent.Chain.Count == 0) throw new InvalidOperationException("No free slot.");
+        return (parent.Chain[0], new HideawayIndex { Chain = [.. parent.Chain[1..], slot] });
+    }
 
     public static void CheckPassword(string p)
     {
@@ -242,18 +251,17 @@ public sealed class HideawayStore
             if (!n.Folder)
             {
                 blob = HideawayCrypto.NewBlobId();
-                // re-encrypted under a fresh blob id: copies never share ciphertext
-                var tmp = Path.Combine(Path.GetTempPath(), "dh-" + HideawayCrypto.NewBlobId());
-                try
+                // re-encrypted under a fresh blob id (copies never share ciphertext), streamed through memory:
+                // the plaintext never touches the disk
+                var pipe = new System.IO.Pipelines.Pipe(new System.IO.Pipelines.PipeOptions(pauseWriterThreshold: 4 << 20, resumeWriterThreshold: 2 << 20));
+                var source = n.Blob!;
+                var reader = Task.Run(() =>
                 {
-                    using (var o = new FileStream(tmp, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1 << 16, FileOptions.DeleteOnClose))
-                    {
-                        ReadBlob(n.Blob!, o);
-                        o.Position = 0;
-                        WriteBlob(blob, o);
-                    }
-                }
-                finally { if (File.Exists(tmp)) File.Delete(tmp); }
+                    try { using var w = pipe.Writer.AsStream(); ReadBlob(source, w); }
+                    catch (Exception e) { pipe.Writer.Complete(e); throw; }
+                });
+                using (var input = pipe.Reader.AsStream()) WriteBlob(blob, input);
+                reader.GetAwaiter().GetResult();
             }
             var copy = new HideawayNode(HideawayCrypto.NewBlobId(), parent, UniqueName(parent, name), n.Folder, n.Size, n.Modified, blob);
             Index.Nodes[copy.Id] = copy;
@@ -303,12 +311,11 @@ public sealed class HideawayStore
             if (decoyPassword == currentPassword) throw new ArgumentException("Decoy password must differ.");
             if (HideawayCrypto.OpenWithPassword(_store.ReadSlot(User, Slot), currentPassword) is null)
                 throw new UnauthorizedAccessException("Current password is wrong.");
-            var slot = Index.DecoySlot ?? throw new InvalidOperationException("No free slot.");
-            var spare = Enumerable.Range(0, HideawayCrypto.SlotCount).First(i => i != slot && i != Slot);
+            var (slot, index) = DecoyOf(Index, Slot);
             var dMaster = HideawayCrypto.NewKey();
             // the decoy gets its own recovery key half: the user's recovery key keeps opening only this vault
             _store.WriteSlot(User, slot, HideawayCrypto.MakeSlot(dMaster, decoyPassword, HideawayCrypto.NewKey()));
-            new Opened(_store, User, slot, dMaster, new HideawayIndex { DecoySlot = spare }).SaveIndex();
+            new Opened(_store, User, slot, dMaster, index).SaveIndex();
         }
 
         internal void SaveIndex()

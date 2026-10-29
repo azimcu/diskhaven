@@ -197,21 +197,27 @@ public static class HideawayEndpoints
                     return Results.Problem("The uploaded file does not match its checksum.", statusCode: 422);
                 }
             }
+            // the name must be valid before anything is moved: "Folder/Sub/file.txt" from a folder upload
+            var parts = b.RelativeName.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            try { if (parts.Length == 0) throw new VaultPathException("Name is empty."); foreach (var part in parts) FileNames.Validate(part); }
+            catch (VaultPathException e) { await tus.DeleteFileAsync(b.UploadId, ctx.RequestAborted); return Results.Problem(e.Message, statusCode: 400); }
             // keep the data file (AddFile encrypts then deletes it); drop only tus' side files
             var keep = file + ".hide";
             File.Move(file, keep);
             await tus.DeleteFileAsync(b.UploadId, ctx.RequestAborted);
-            return Do(ctx, vault =>
+            try
             {
-                // "Folder/Sub/file.txt" from a folder upload: create the folders on the way
-                var parts = b.RelativeName.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-                var parent = Nul(b.Parent);
-                foreach (var dir in parts[..^1])
-                    parent = (vault.Children(parent).FirstOrDefault(n => n.Folder && n.Name.Equals(dir, StringComparison.OrdinalIgnoreCase))
-                              ?? vault.CreateFolder(parent, dir)).Id;
-                var node = vault.AddFile(parent, parts[^1], keep, b.LastModified is { } ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null);
-                return Entry(vault, node);
-            });
+                return Do(ctx, vault =>
+                {
+                    var parent = Nul(b.Parent);
+                    foreach (var dir in parts[..^1])
+                        parent = (vault.Children(parent).FirstOrDefault(n => n.Folder && n.Name.Equals(dir, StringComparison.OrdinalIgnoreCase))
+                                  ?? vault.CreateFolder(parent, dir)).Id;
+                    var node = vault.AddFile(parent, parts[^1], keep, b.LastModified is { } ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null);
+                    return Entry(vault, node);
+                });
+            }
+            finally { if (File.Exists(keep)) File.Delete(keep); }   // a failed commit never leaves the plain file behind
         });
 
         v.MapGet("/content", async (string id, bool? download, HttpContext ctx) =>
