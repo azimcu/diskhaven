@@ -5,7 +5,7 @@ services:
   diskhaven-demo:
     image: ${DH_DEMO_IMAGE:-diskhaven:demo}
     container_name: diskhaven-demo
-    labels: {icon: "http://192.168.1.249:8095/icon.svg"}   # CasaOS simgesi
+    labels: {icon: "https://raw.githubusercontent.com/azimcu/diskhaven/main/web/public/icon.svg"}   # CasaOS icon
     user: "${DH_UID}:${DH_GID}"
     restart: unless-stopped
     ports:
@@ -33,3 +33,21 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+
+# CasaOS app tile metadata (ignored by docker compose)
+x-casaos:
+  architectures: [amd64]
+  author: Azim Çağrı Ünal
+  category: Utilities
+  main: diskhaven-demo
+  port_map: "8097"
+  scheme: http
+  index: /
+  icon: https://raw.githubusercontent.com/azimcu/diskhaven/main/web/public/icon.svg
+  title:
+    custom: DiskHaven Demo
+    en_US: DiskHaven Demo
+  tagline:
+    en_US: Public demo, resets every hour
+  description:
+    en_US: Public demo, resets every hour

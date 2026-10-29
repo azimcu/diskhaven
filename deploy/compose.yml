@@ -5,7 +5,7 @@ services:
     build: ..
     image: diskhaven:latest
     container_name: diskhaven
-    labels: {icon: "http://192.168.1.249:8095/icon.svg"}   # CasaOS simgesi
+    labels: {icon: "https://raw.githubusercontent.com/azimcu/diskhaven/main/web/public/icon.svg"}   # CasaOS icon
     user: "${DH_UID}:${DH_GID}"
     restart: unless-stopped
     ports:
@@ -34,3 +34,21 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+
+# CasaOS app tile metadata (ignored by docker compose)
+x-casaos:
+  architectures: [amd64]
+  author: Azim Çağrı Ünal
+  category: Utilities
+  main: diskhaven
+  port_map: "8095"
+  scheme: http
+  index: /
+  icon: https://raw.githubusercontent.com/azimcu/diskhaven/main/web/public/icon.svg
+  title:
+    custom: DiskHaven
+    en_US: DiskHaven
+  tagline:
+    en_US: Files and disks
+  description:
+    en_US: Files and disks
