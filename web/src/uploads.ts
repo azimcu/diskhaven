@@ -172,7 +172,7 @@ function tusUpload(item: UploadItem, onProgress: (p: number) => void): Promise<s
       metadata: { filename: item.relativeName, destination: item.destination },
       // same file into the same place -> continue the earlier, interrupted upload
       fingerprint: async () =>
-        ['homevault', item.destination, item.relativeName, item.file.size, item.file.lastModified].join('|'),
+        ['diskhaven', item.destination, item.relativeName, item.file.size, item.file.lastModified].join('|'),
       storeFingerprintForResuming: true,
       removeFingerprintOnSuccess: true,
       onProgress: (sent, total) => onProgress(total ? sent / total : 1),

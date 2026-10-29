@@ -50,7 +50,7 @@ export function DisksView({ onChanged }: { onChanged: () => void }) {
   const adopt = async (d: Disk) => {
     const name = await promptDialog('Yedek diskin adı (ör. "Yedek 2TB")', d.label || d.model || 'Yedek disk')
     if (!name) return
-    await act(d, () => api.adoptDisk(d.id, name), `${name} artık HomeVault yedek diski. Diskteki mevcut dosyalara dokunulmadı.`)
+    await act(d, () => api.adoptDisk(d.id, name), `${name} artık DiskHaven yedek diski. Diskteki mevcut dosyalara dokunulmadı.`)
   }
 
   const sync = async (d: Disk) => {
@@ -75,7 +75,7 @@ export function DisksView({ onChanged }: { onChanged: () => void }) {
       <div className="addressbar"><div className="crumbs"><span className="crumb current">Diskler</span></div></div>
       <div className="list-wrap disks-page">
         {data.demo && <p className="empty-note">Demoda gerçek disk yok. Gerçek kurulumda USB diskler burada görünür: bağla, ayır, uyut, SMART sağlığına bak ve yedek eşitlemesi planla.</p>}
-        {!data.agent && !data.demo && <p className="empty-note error">Disk servisi çalışmıyor. Sunucuda <code>homevault-diskd</code> servisini başlat.</p>}
+        {!data.agent && !data.demo && <p className="empty-note error">Disk servisi çalışmıyor. Sunucuda <code>diskhaven-diskd</code> servisini başlat.</p>}
         {job && (job.status === 'Running' || Date.now() - new Date(job.started).getTime() < 10 * 60_000) && <JobCard job={job} />}
         {data.agent && data.disks.length === 0 && <p className="empty-note">Takılı bir USB disk yok.</p>}
         <div className="disk-grid">
@@ -227,7 +227,7 @@ function planDialog(d: Disk, plan: SyncPlanResult): Promise<boolean> {
             <ul className="plan-list">
               {plan.actions.map((a, i) => <li key={i}><span className={`tag ${a.kind}`}>{kindText[a.kind] ?? a.kind}</span> {a.kind === 'Move' ? `${a.targetPath} → ${a.path}` : a.path}</li>)}
             </ul>
-            <p className="muted small">* Silinen ve değişen dosyaların eski hâli diskte <code>.homevault-trash</code> klasöründe 30 gün saklanır.</p>
+            <p className="muted small">* Silinen ve değişen dosyaların eski hâli diskte <code>.diskhaven-trash</code> klasöründe 30 gün saklanır.</p>
           </>
         )}
         {plan.skipped.length > 0 && <p className="small err-text">{plan.skipped.length} öğe atlanacak: {plan.skipped.slice(0, 3).join(', ')}</p>}

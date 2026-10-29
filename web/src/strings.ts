@@ -19,7 +19,7 @@ const serverMessages: Record<string, string> = {
   'Not enough free space on the disk.': 'Diskte yeterli boş alan yok.',
   'Upload is not complete.': 'Yükleme tamamlanmadı.',
   network: 'Sunucuya ulaşılamıyor. Bağlantını kontrol et.',
-  'Disk is not adopted.': 'Bu disk henüz HomeVault yedek diski yapılmamış.',
+  'Disk is not adopted.': 'Bu disk henüz DiskHaven yedek diski yapılmamış.',
   'No folders are assigned to this disk.': 'Bu diske henüz klasör atanmamış.',
   'A sync is already running.': 'Şu an başka bir eşitleme sürüyor.',
   'Invalid time.': 'Saat geçersiz.',
@@ -43,7 +43,7 @@ export function translateServerMessage(message: string, status?: number): string
 }
 
 export const t = {
-  appName: 'HomeVault',
+  appName: 'DiskHaven',
   thisNas: 'Bu NAS',
   trash: 'Çöp Kutusu',
   disks: 'Diskler',

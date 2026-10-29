@@ -19,11 +19,11 @@ DOCS = {
 PICTURES = [f"Fotoğraflar/2026 Kapadokya/IMG_{1040 + i}.png" for i in range(6)] + \
            [f"Fotoğraflar/2025 Ege/IMG_{2210 + i}.png" for i in range(4)]
 TEXT = {
-    "BENİ OKU.md": "# HomeVault demosu\n\nBu klasördeki her şey örnektir. Dosya yükle, taşı, sil, ara; çöp kutusunu dene.\n"
-                   "Her saat başı her şey ilk haline döner.\n\nKaynak kod: https://github.com/azimcu/homevault\n",
+    "BENİ OKU.md": "# DiskHaven demosu\n\nBu klasördeki her şey örnektir. Dosya yükle, taşı, sil, ara; çöp kutusunu dene.\n"
+                   "Her saat başı her şey ilk haline döner.\n\nKaynak kod: https://github.com/azimcu/diskhaven\n",
     "Belgeler/Okuma listesi.md": "# Okuma listesi\n\n- Designing Data-Intensive Applications\n- Clean Architecture\n- The Pragmatic Programmer\n",
     "Belgeler/Notlar.txt": "Alışveriş: süt, ekmek, kahve\nPazartesi: sunucu yedeğini kontrol et\nçğıöşü ÇĞİÖŞÜ\n",
-    "Projeler/hello-dotnet/Program.cs": 'var app = WebApplication.CreateBuilder(args).Build();\napp.MapGet("/", () => "Merhaba HomeVault");\napp.Run();\n',
+    "Projeler/hello-dotnet/Program.cs": 'var app = WebApplication.CreateBuilder(args).Build();\napp.MapGet("/", () => "Merhaba DiskHaven");\napp.Run();\n',
     "Projeler/hello-dotnet/README.md": "# hello-dotnet\n\n`dotnet run` ile çalışır.\n",
     "Projeler/Çok/Derin/Bir/Klasör/Yapısı/son.txt": "En derindeki dosya.\n",
 }
@@ -35,7 +35,7 @@ def doc_html(title, sections, rng):
     return f"""<html><head><meta charset="utf-8"><style>
       body{{font-family:'DejaVu Sans',sans-serif;margin:48px;color:#222}} h1{{color:#7a1f2b;border-bottom:2px solid #7a1f2b}}
       h2{{font-size:16px;margin-top:28px}} p{{line-height:1.6;font-size:12px}}</style></head>
-      <body><h1>{title}</h1><p><i>HomeVault demo belgesi · {datetime.date(2026, 10, 1)}</i></p>{body}</body></html>"""
+      <body><h1>{title}</h1><p><i>DiskHaven demo belgesi · {datetime.date(2026, 10, 1)}</i></p>{body}</body></html>"""
 
 
 def picture_svg(rng):

@@ -1,26 +1,26 @@
 # Development instance on homenas. Fully isolated: own project name, own network, only the
 # dummy-data folder is mounted. Remove everything with:  dev/remove-dev.sh
-name: homevault-dev
+name: diskhaven-dev
 services:
-  homevault:
+  diskhaven:
     build: ..
-    image: homevault:dev
-    container_name: homevault-dev
+    image: diskhaven:dev
+    container_name: diskhaven-dev
     user: "1000:1000"
     restart: unless-stopped
     ports:
       - "8095:8080"
     environment:
       TZ: Europe/Istanbul
-      HomeVault__AgentSocket: /run/homevault/diskd.sock
-      HomeVault__DisksPath: /disks
+      DiskHaven__AgentSocket: /run/diskhaven/diskd.sock
+      DiskHaven__DisksPath: /disks
     volumes:
-      - /mnt/immich/homevault-dev/data:/data
-      - /mnt/immich/homevault-dev/config:/config
+      - /mnt/immich/diskhaven-dev/data:/data
+      - /mnt/immich/diskhaven-dev/config:/config
       # disk agent socket (dev agent: virtual disks only) and the folder it mounts disks under
-      - /run/homevault-dev:/run/homevault
+      - /run/diskhaven-dev:/run/diskhaven
       - type: bind
-        source: /srv/homevault-dev/disks
+        source: /srv/diskhaven-dev/disks
         target: /disks
         bind:
           propagation: rslave

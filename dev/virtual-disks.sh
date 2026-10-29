@@ -5,7 +5,7 @@
 #   dev/virtual-disks.sh down [image-dir]   unmount and detach
 #   dev/virtual-disks.sh status
 set -euo pipefail
-DIR=${2:-/mnt/immich/homevault-dev/disks}
+DIR=${2:-/mnt/immich/diskhaven-dev/disks}
 # name:size  (sizes mirror the real 2 TB / 1 TB / 1 TB disks at a tiny scale)
 DISKS=("USB-2TB:400M" "USB-1TB-A:200M" "USB-1TB-B:200M")
 

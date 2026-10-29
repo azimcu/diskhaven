@@ -1,18 +1,18 @@
 #!/bin/bash
 # Host-side deployer (root, systemd timer every 2 minutes). The CI runner has no access to this host;
 # this script only reads Forgejo and acts on commits CI has marked green:
-#   - newest green commit on main  -> rebuilt as homevault:demo and put on the demo (then reset)
-#   - newest green tag v*          -> rebuilt as homevault:latest and put on the real instance
+#   - newest green commit on main  -> rebuilt as diskhaven:demo and put on the demo (then reset)
+#   - newest green tag v*          -> rebuilt as diskhaven:latest and put on the real instance
 # A failed health check rolls back to the previous image. Results are posted back to Forgejo as
 # commit statuses "deploy/demo" and "deploy/prod".
 set -euo pipefail
-API=${HV_FORGEJO_API:-http://127.0.0.1:3005/api/v1}
-REPO=${HV_FORGEJO_REPO:-azimcu/homevault}
-TOKEN=$(cat "${HV_FORGEJO_TOKEN_FILE:-/etc/homevault-ci/token}")
-STATE=/var/lib/homevault-ci; SRC=$STATE/src
-PROD_COMPOSE=${HV_PROD_COMPOSE:-/home/azim/projeler/homevault/deploy/compose.yml}
+API=${DH_FORGEJO_API:-http://127.0.0.1:3005/api/v1}
+REPO=${DH_FORGEJO_REPO:-azimcu/diskhaven}
+TOKEN=$(cat "${DH_FORGEJO_TOKEN_FILE:-/etc/diskhaven-ci/token}")
+STATE=/var/lib/diskhaven-ci; SRC=$STATE/src
+PROD_COMPOSE=${DH_PROD_COMPOSE:-/home/azim/projeler/diskhaven/deploy/compose.yml}
 install -d -m 700 $STATE   # private state dir; the checkout inside keeps normal file modes (the app must read them)
-exec 9>/run/homevault-ci.lock; flock -n 9 || exit 0
+exec 9>/run/diskhaven-ci.lock; flock -n 9 || exit 0
 
 api() { curl -fsS -m 20 -H "Authorization: token $TOKEN" "$API/repos/$REPO/$1"; }
 status() {  # sha context state description
@@ -33,11 +33,11 @@ build() {   # sha tag
 SHA=$(api branches/main | jq -r .commit.id); [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
 if [ "$SHA" != "$(cat $STATE/demo 2>/dev/null)" ] && green "$SHA"; then
     echo "demo <- $SHA"; status "$SHA" deploy/demo pending "deploying to demo"
-    docker tag homevault:demo homevault:demo-previous 2>/dev/null || true
-    if build "$SHA" homevault:demo && systemctl start homevault-demo-reset.service && healthy http://127.0.0.1:8097/api/health; then
+    docker tag diskhaven:demo diskhaven:demo-previous 2>/dev/null || true
+    if build "$SHA" diskhaven:demo && systemctl start diskhaven-demo-reset.service && healthy http://127.0.0.1:8097/api/health; then
         echo "$SHA" > $STATE/demo; status "$SHA" deploy/demo success "live on demo.azimunal.com.tr"
     else
-        docker tag homevault:demo-previous homevault:demo 2>/dev/null && systemctl start homevault-demo-reset.service || true
+        docker tag diskhaven:demo-previous diskhaven:demo 2>/dev/null && systemctl start diskhaven-demo-reset.service || true
         echo "$SHA" > $STATE/demo; status "$SHA" deploy/demo failure "demo deploy failed, previous version kept"
     fi
 fi
@@ -48,12 +48,12 @@ if [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+)*$ ]] && [ "$TAG" != "$(cat $STATE/prod 2>/dev
     TSHA=$(api "tags/$TAG" | jq -r .commit.sha)
     if green "$TSHA"; then
         echo "prod <- $TAG ($TSHA)"; status "$TSHA" deploy/prod pending "deploying $TAG"
-        docker tag homevault:latest homevault:previous
-        if build "$TSHA" "homevault:$TAG" && docker tag "homevault:$TAG" homevault:latest &&
+        docker tag diskhaven:latest diskhaven:previous
+        if build "$TSHA" "diskhaven:$TAG" && docker tag "diskhaven:$TAG" diskhaven:latest &&
            docker compose -f "$PROD_COMPOSE" up -d --no-build && healthy http://127.0.0.1:8095/api/health; then
             echo "$TAG" > $STATE/prod; status "$TSHA" deploy/prod success "$TAG live"
         else
-            docker tag homevault:previous homevault:latest && docker compose -f "$PROD_COMPOSE" up -d --no-build || true
+            docker tag diskhaven:previous diskhaven:latest && docker compose -f "$PROD_COMPOSE" up -d --no-build || true
             echo "$TAG" > $STATE/prod; status "$TSHA" deploy/prod failure "$TAG failed, previous version restored"
         fi
     fi
