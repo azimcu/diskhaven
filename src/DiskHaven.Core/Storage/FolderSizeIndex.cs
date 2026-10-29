@@ -120,7 +120,7 @@ public sealed class FolderSizeIndex(VaultRoot root) : IVaultChangeListener
             {
                 if (info.LinkTarget is not null)
                     continue;
-                if (dir == root.FullPath && info.Name.Equals(VaultRoot.InternalFolderName, StringComparison.OrdinalIgnoreCase))
+                if (dir == root.FullPath && VaultRoot.IsInternalName(info.Name))
                     continue;
                 if (info is FileInfo f)
                     total += new FolderStats(f.Length, 1, 0);

@@ -30,7 +30,7 @@ public static class FileNames
             throw new VaultPathException("Name must not contain < > : \" / \\ | ? *");
         if (Reserved.Contains(Path.GetFileNameWithoutExtension(n)))
             throw new VaultPathException("This name is reserved by Windows.");
-        if (n.Equals(VaultRoot.InternalFolderName, StringComparison.OrdinalIgnoreCase))
+        if (VaultRoot.IsInternalName(n))
             throw new VaultPathException("Name is reserved.");
         return n;
     }

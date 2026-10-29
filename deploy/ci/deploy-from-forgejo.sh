@@ -12,19 +12,22 @@ TOKEN=$(cat "${DH_FORGEJO_TOKEN_FILE:-/etc/diskhaven-ci/token}")
 STATE=/var/lib/diskhaven-ci; SRC=$STATE/src
 PROD_COMPOSE=${DH_PROD_COMPOSE:-/home/azim/projeler/diskhaven/deploy/compose.yml}
 install -d -m 700 $STATE   # private state dir; the checkout inside keeps normal file modes (the app must read them)
+# the token never goes on a command line (other local users could see it in the process list)
+HDR=$STATE/auth-header; (umask 077; printf 'Authorization: token %s\n' "$TOKEN" > $HDR)
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: token $TOKEN"
 exec 9>/run/diskhaven-ci.lock; flock -n 9 || exit 0
 
-api() { curl -fsS -m 20 -H "Authorization: token $TOKEN" "$API/repos/$REPO/$1"; }
+api() { curl -fsS -m 20 -H @$HDR "$API/repos/$REPO/$1"; }
 status() {  # sha context state description
-    curl -fsS -m 20 -o /dev/null -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
+    curl -fsS -m 20 -o /dev/null -H @$HDR -H 'Content-Type: application/json' \
         -d "$(jq -nc --arg c "$2" --arg s "$3" --arg d "$4" '{context:$c,state:$s,description:$d}')" "$API/repos/$REPO/statuses/$1" || true; }
 green() { [ "$(api "commits/$1/status" | jq -r '[.statuses[] | select(.context | startswith("deploy/") | not)] as $s
           | if ($s | length) == 0 then "none" elif all($s[]; .status == "success") then "success" else "no" end')" = success ]; }
 healthy() { for _ in $(seq 1 60); do curl -fs -m 2 "$1" | grep -q ok && return 0; sleep 2; done; return 1; }
 build() {   # sha tag
-    # the token goes in per command (-c before the subcommand), never into .git/config
-    [ -d $SRC/.git ] || git -c "http.extraHeader=Authorization: token $TOKEN" clone -q "http://127.0.0.1:3005/$REPO.git" $SRC
-    git -C $SRC -c "http.extraHeader=Authorization: token $TOKEN" fetch -q --tags origin
+    # the token comes from GIT_CONFIG_* in the environment: never in .git/config or on the command line
+    [ -d $SRC/.git ] || git clone -q "http://127.0.0.1:3005/$REPO.git" $SRC
+    git -C $SRC fetch -q --tags origin
     git -C $SRC checkout -q --detach "$1"
     docker build -q -t "$2" $SRC >/dev/null
 }

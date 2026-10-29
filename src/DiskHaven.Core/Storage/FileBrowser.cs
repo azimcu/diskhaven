@@ -17,7 +17,7 @@ public sealed class FileBrowser(VaultRoot root, FolderSizeIndex? sizes = null)
         {
             if (info.LinkTarget is not null)
                 continue;
-            if (info.Name.Equals(VaultRoot.InternalFolderName, StringComparison.OrdinalIgnoreCase) && full == Root.FullPath)
+            if (VaultRoot.IsInternalName(info.Name) && full == Root.FullPath)
                 continue;
             entries.Add(ToEntry(info));
         }
@@ -57,7 +57,7 @@ public sealed class FileBrowser(VaultRoot root, FolderSizeIndex? sizes = null)
             catch (IOException) { continue; }
             foreach (var info in items)
             {
-                if (dir == Root.FullPath && info.Name.Equals(VaultRoot.InternalFolderName, StringComparison.OrdinalIgnoreCase))
+                if (dir == Root.FullPath && VaultRoot.IsInternalName(info.Name))
                     continue;
                 if (info is DirectoryInfo)
                     pending.Push(info.FullName);
