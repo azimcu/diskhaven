@@ -1,6 +1,6 @@
 {
-  "name": "HomeVault",
-  "short_name": "HomeVault",
+  "name": "DiskHaven",
+  "short_name": "DiskHaven",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f3f3f3",

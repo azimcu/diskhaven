@@ -1,9 +1,9 @@
 {
-  "mountRoot": "/srv/homevault-dev/disks",
-  "socket": "/run/homevault-dev/diskd.sock",
-  "stateFile": "/var/lib/homevault-dev/diskd-known.json",
+  "mountRoot": "/srv/diskhaven-dev/disks",
+  "socket": "/run/diskhaven-dev/diskd.sock",
+  "stateFile": "/var/lib/diskhaven-dev/diskd-known.json",
   "uid": 1000,
   "gid": 1000,
   "usb": false,
-  "virtualDir": "/mnt/immich/homevault-dev/disks"
+  "virtualDir": "/mnt/immich/diskhaven-dev/disks"
 }

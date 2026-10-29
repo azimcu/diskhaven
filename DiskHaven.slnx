@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DiskHaven.Api/DiskHaven.Api.csproj" />
+    <Project Path="src/DiskHaven.Core/DiskHaven.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DiskHaven.Api.Tests/DiskHaven.Api.Tests.csproj" />
+    <Project Path="tests/DiskHaven.Core.Tests/DiskHaven.Core.Tests.csproj" />
+  </Folder>
+</Solution>

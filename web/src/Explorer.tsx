@@ -265,7 +265,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   const dragStart = (e: React.DragEvent, entry: FileEntry) => {
     const paths = selected.has(entry.path) ? [...selected] : [entry.path]
     if (!selected.has(entry.path)) setSelected(new Set([entry.path]))
-    e.dataTransfer.setData('application/x-homevault', JSON.stringify(paths))
+    e.dataTransfer.setData('application/x-diskhaven', JSON.stringify(paths))
     e.dataTransfer.effectAllowed = 'copyMove'
   }
 

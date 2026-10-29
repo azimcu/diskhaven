@@ -4,21 +4,21 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 command -v jq >/dev/null || apt-get install -y -q jq
-install -d -m 700 /etc/homevault-ci
-install -m 600 "${1:?token file}" /etc/homevault-ci/token
-install -m 755 $HERE/deploy-from-forgejo.sh /usr/local/sbin/homevault-ci-deploy
-cat > /etc/systemd/system/homevault-ci-deploy.service <<UNIT
+install -d -m 700 /etc/diskhaven-ci
+install -m 600 "${1:?token file}" /etc/diskhaven-ci/token
+install -m 755 $HERE/deploy-from-forgejo.sh /usr/local/sbin/diskhaven-ci-deploy
+cat > /etc/systemd/system/diskhaven-ci-deploy.service <<UNIT
 [Unit]
-Description=HomeVault: deploy green Forgejo builds (main -> demo, v* tag -> real instance)
+Description=DiskHaven: deploy green Forgejo builds (main -> demo, v* tag -> real instance)
 After=docker.service
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/homevault-ci-deploy
+ExecStart=/usr/local/sbin/diskhaven-ci-deploy
 Nice=10
 UNIT
-cat > /etc/systemd/system/homevault-ci-deploy.timer <<UNIT
+cat > /etc/systemd/system/diskhaven-ci-deploy.timer <<UNIT
 [Unit]
-Description=HomeVault: check Forgejo for new green builds every 2 minutes
+Description=DiskHaven: check Forgejo for new green builds every 2 minutes
 [Timer]
 OnBootSec=3min
 OnUnitActiveSec=2min
@@ -26,4 +26,4 @@ OnUnitActiveSec=2min
 WantedBy=timers.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now homevault-ci-deploy.timer
+systemctl enable --now diskhaven-ci-deploy.timer

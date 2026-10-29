@@ -40,10 +40,10 @@ export function App() {
   useEffect(() => {
     api.authState().then(setAuth).catch(() => setAuth({ setupRequired: false, user: null }))
     const onUnauthorized = () => setAuth(a => (a ? { ...a, user: null } : a))
-    window.addEventListener('homevault:unauthorized', onUnauthorized)
+    window.addEventListener('diskhaven:unauthorized', onUnauthorized)
     const onHash = () => { setRoute(parseHash()); setDrawer(false) }
     window.addEventListener('hashchange', onHash)
-    return () => { window.removeEventListener('homevault:unauthorized', onUnauthorized); window.removeEventListener('hashchange', onHash) }
+    return () => { window.removeEventListener('diskhaven:unauthorized', onUnauthorized); window.removeEventListener('hashchange', onHash) }
   }, [])
 
   const changed = useCallback(() => {
@@ -54,10 +54,10 @@ export function App() {
 
   const navigate = useCallback((path: string) => { location.hash = hashFor(path) }, [])
 
-  /** Drop onto a folder: items dragged inside HomeVault are moved (Ctrl = copy), files from the computer are uploaded. */
+  /** Drop onto a folder: items dragged inside DiskHaven are moved (Ctrl = copy), files from the computer are uploaded. */
   const onDropItems = useCallback(async (dest: string, e: React.DragEvent) => {
     e.preventDefault()
-    const internal = e.dataTransfer.getData('application/x-homevault')
+    const internal = e.dataTransfer.getData('application/x-diskhaven')
     if (internal) {
       const paths: string[] = JSON.parse(internal)
       const copy = e.ctrlKey || e.altKey

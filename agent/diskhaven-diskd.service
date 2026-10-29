@@ -1,0 +1,12 @@
+[Unit]
+Description=DiskHaven disk agent (mount, spin-down and power control for DiskHaven disks)
+After=local-fs.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/diskhaven/diskhaven-diskd.py /etc/diskhaven/diskd.json
+Restart=on-failure
+NoNewPrivileges=true
+# no mount namespacing (ProtectSystem, PrivateTmp...): mounts must be visible to the host and the container
+
+[Install]
+WantedBy=multi-user.target

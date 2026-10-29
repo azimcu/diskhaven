@@ -8,7 +8,7 @@ export class ApiError extends Error {
 }
 
 /** Every state-changing call carries this header; the server rejects calls without it (CSRF guard). */
-export const csrfHeader = { 'X-HomeVault': '1' }
+export const csrfHeader = { 'X-DiskHaven': '1' }
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   let res: Response
@@ -22,7 +22,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   } catch {
     throw new ApiError(translateServerMessage('network'), 0)
   }
-  if (res.status === 401 && !url.startsWith('/api/auth')) window.dispatchEvent(new Event('homevault:unauthorized'))
+  if (res.status === 401 && !url.startsWith('/api/auth')) window.dispatchEvent(new Event('diskhaven:unauthorized'))
   if (!res.ok) {
     let message = res.statusText
     try {

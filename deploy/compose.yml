@@ -1,29 +1,29 @@
 # Production instance. Created and updated by deploy/install.sh (values come from deploy/.env).
-name: homevault
+name: diskhaven
 services:
-  homevault:
+  diskhaven:
     build: ..
-    image: homevault:latest
-    container_name: homevault
+    image: diskhaven:latest
+    container_name: diskhaven
     labels: {icon: "http://192.168.1.249:8095/icon.svg"}   # CasaOS simgesi
-    user: "${HV_UID}:${HV_GID}"
+    user: "${DH_UID}:${DH_GID}"
     restart: unless-stopped
     ports:
-      - "${HV_PORT:-8095}:8080"
+      - "${DH_PORT:-8095}:8080"
     environment:
       TZ: Europe/Istanbul
       # OpenTelemetry (boş = kapalı). Sunucuda gözlem yığını: ~/projeler/gozlem
-      HomeVault__Telemetry__Metrics: ${HV_OTLP_METRICS:-}
-      HomeVault__Telemetry__Traces: ${HV_OTLP_TRACES:-}
-      HomeVault__Telemetry__ServiceName: homevault
-      HomeVault__AgentSocket: /run/homevault/diskd.sock
-      HomeVault__DisksPath: /disks
+      DiskHaven__Telemetry__Metrics: ${DH_OTLP_METRICS:-}
+      DiskHaven__Telemetry__Traces: ${DH_OTLP_TRACES:-}
+      DiskHaven__Telemetry__ServiceName: diskhaven
+      DiskHaven__AgentSocket: /run/diskhaven/diskd.sock
+      DiskHaven__DisksPath: /disks
     volumes:
-      - ${HV_DATA}:/data
-      - ${HV_CONFIG}:/config
-      - /run/homevault:/run/homevault
+      - ${DH_DATA}:/data
+      - ${DH_CONFIG}:/config
+      - /run/diskhaven:/run/diskhaven
       - type: bind
-        source: /srv/homevault/disks
+        source: /srv/diskhaven/disks
         target: /disks
         bind:
           propagation: rslave

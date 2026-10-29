@@ -1,29 +1,29 @@
 # Public demo (demo.azimunal.com.tr). Separate from the real instance: own folders on a 1 GB disk image
 # (copies/uploads can never fill the host), no disk agent, no host disks, small CPU/RAM caps. deploy/demo/install-demo.sh creates it; reset-demo.sh resets it hourly.
-name: homevault-demo
+name: diskhaven-demo
 services:
-  homevault-demo:
-    image: ${HV_DEMO_IMAGE:-homevault:demo}
-    container_name: homevault-demo
+  diskhaven-demo:
+    image: ${DH_DEMO_IMAGE:-diskhaven:demo}
+    container_name: diskhaven-demo
     labels: {icon: "http://192.168.1.249:8095/icon.svg"}   # CasaOS simgesi
-    user: "${HV_UID}:${HV_GID}"
+    user: "${DH_UID}:${DH_GID}"
     restart: unless-stopped
     ports:
-      - "${HV_DEMO_PORT:-8097}:8080"
+      - "${DH_DEMO_PORT:-8097}:8080"
     environment:
       TZ: Europe/Istanbul
       # OpenTelemetry (boş = kapalı). Sunucuda gözlem yığını: ~/projeler/gozlem
-      HomeVault__Telemetry__Metrics: ${HV_OTLP_METRICS:-}
-      HomeVault__Telemetry__Traces: ${HV_OTLP_TRACES:-}
-      HomeVault__Telemetry__ServiceName: homevault-demo
-      HomeVault__Demo__Enabled: "true"
-      HomeVault__Demo__UserName: demo
-      HomeVault__Demo__Password: ${HV_DEMO_PASSWORD}
-      HomeVault__Demo__MaxUploadMB: "20"
-      HomeVault__Demo__MaxTotalMB: "400"
+      DiskHaven__Telemetry__Metrics: ${DH_OTLP_METRICS:-}
+      DiskHaven__Telemetry__Traces: ${DH_OTLP_TRACES:-}
+      DiskHaven__Telemetry__ServiceName: diskhaven-demo
+      DiskHaven__Demo__Enabled: "true"
+      DiskHaven__Demo__UserName: demo
+      DiskHaven__Demo__Password: ${DH_DEMO_PASSWORD}
+      DiskHaven__Demo__MaxUploadMB: "20"
+      DiskHaven__Demo__MaxTotalMB: "400"
     volumes:
-      - ${HV_DEMO_ROOT}/live/data:/data
-      - ${HV_DEMO_ROOT}/live/config:/config
+      - ${DH_DEMO_ROOT}/live/data:/data
+      - ${DH_DEMO_ROOT}/live/config:/config
     mem_limit: 384m
     cpus: 0.5
     pids_limit: 200

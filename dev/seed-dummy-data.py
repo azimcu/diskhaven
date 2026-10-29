@@ -39,7 +39,7 @@ def write(path, rng):
             f.write(rng.randbytes(rng.randint(lo, hi) * 1024))
     else:
         with open(path, "w", encoding="utf-8") as f:
-            f.write(f"HomeVault sahte dosya: {os.path.basename(path)}\nçğıöşü ÇĞİÖŞÜ\n" * rng.randint(1, 40))
+            f.write(f"DiskHaven sahte dosya: {os.path.basename(path)}\nçğıöşü ÇĞİÖŞÜ\n" * rng.randint(1, 40))
     # spread modification times over the last two years
     t = (datetime.datetime.now() - datetime.timedelta(days=rng.randint(0, 730), minutes=rng.randint(0, 1440))).timestamp()
     os.utime(path, (t, t))

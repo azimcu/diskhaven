@@ -1,6 +1,6 @@
 /** Light / dark / follow-the-system theme, remembered per browser. */
 export type Theme = 'system' | 'light' | 'dark'
-const KEY = 'homevault-theme'
+const KEY = 'diskhaven-theme'
 
 export function savedTheme(): Theme {
   try {
