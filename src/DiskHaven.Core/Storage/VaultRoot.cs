@@ -12,6 +12,11 @@ public sealed class VaultRoot
     /// <summary>Internal folder name before the rename from HomeVault (2026-10); moved on start.</summary>
     public const string LegacyInternalFolderName = ".homevault";
 
+    /// <summary>True for the internal folder under its current or old name: both are hidden and reserved.</summary>
+    public static bool IsInternalName(string name) =>
+        name.Equals(InternalFolderName, StringComparison.OrdinalIgnoreCase) ||
+        name.Equals(LegacyInternalFolderName, StringComparison.OrdinalIgnoreCase);
+
     public string FullPath { get; }
 
     public VaultRoot(string path)
@@ -41,7 +46,7 @@ public sealed class VaultRoot
                 throw new VaultPathException("Path must not contain '.' or '..' segments.");
             if (segment.Any(char.IsControl) || segment.Contains(':'))
                 throw new VaultPathException("Path contains invalid characters.");
-            if (segment.Equals(InternalFolderName, StringComparison.OrdinalIgnoreCase))
+            if (IsInternalName(segment))
                 throw new VaultPathException("Path is reserved.");
         }
         return string.Join('/', segments);
