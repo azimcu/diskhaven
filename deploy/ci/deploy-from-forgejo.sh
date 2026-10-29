@@ -14,7 +14,9 @@ PROD_COMPOSE=${DH_PROD_COMPOSE:-/home/azim/projeler/diskhaven/deploy/compose.yml
 install -d -m 700 $STATE   # private state dir; the checkout inside keeps normal file modes (the app must read them)
 # the token never goes on a command line (other local users could see it in the process list)
 HDR=$STATE/auth-header; (umask 077; printf 'Authorization: token %s\n' "$TOKEN" > $HDR)
-export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: token $TOKEN"
+# git gets the token only for these commands and only for the Forgejo address (never sent to another host)
+fgit() { GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.http://127.0.0.1:3005/.extraHeader" GIT_CONFIG_VALUE_0="Authorization: token $TOKEN" \
+         GIT_LFS_SKIP_SMUDGE=1 git "$@"; }
 exec 9>/run/diskhaven-ci.lock; flock -n 9 || exit 0
 
 api() { curl -fsS -m 20 -H @$HDR "$API/repos/$REPO/$1"; }
@@ -25,9 +27,9 @@ green() { [ "$(api "commits/$1/status" | jq -r '[.statuses[] | select(.context |
           | if ($s | length) == 0 then "none" elif all($s[]; .status == "success") then "success" else "no" end')" = success ]; }
 healthy() { for _ in $(seq 1 60); do curl -fs -m 2 "$1" | grep -q ok && return 0; sleep 2; done; return 1; }
 build() {   # sha tag
-    # the token comes from GIT_CONFIG_* in the environment: never in .git/config or on the command line
-    [ -d $SRC/.git ] || git clone -q "http://127.0.0.1:3005/$REPO.git" $SRC
-    git -C $SRC fetch -q --tags origin
+    # the token comes from fgit (environment of that one command): never in .git/config or on the command line
+    [ -d $SRC/.git ] || fgit clone -q "http://127.0.0.1:3005/$REPO.git" $SRC
+    fgit -C $SRC fetch -q --tags origin
     git -C $SRC checkout -q --detach "$1"
     docker build -q -t "$2" $SRC >/dev/null
 }
