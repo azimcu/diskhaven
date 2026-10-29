@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, LogOut, Menu as MenuIcon, UserCircle2, Users } from 'lucide-react'
+import { KeyRound, LogOut, Menu as MenuIcon, Monitor, Moon, Sun, UserCircle2, Users } from 'lucide-react'
+import { applyTheme, nextTheme, savedTheme, type Theme } from './theme'
 import { api } from './api'
 import { promptDialog, toast, toastError, Toasts } from './dialogs'
 import { Explorer, type Clipboard } from './Explorer'
@@ -27,6 +28,8 @@ const hashFor = (path: string) => `#/files${path ? '/' + path.split('/').map(enc
 
 export function App() {
   const [auth, setAuth] = useState<AuthState | null>(null)
+  const [theme, setTheme] = useState<Theme>(savedTheme)
+  const cycleTheme = () => { const t = nextTheme(theme); applyTheme(t); setTheme(t) }
   const [route, setRoute] = useState<Route>(parseHash)
   const [version, setVersion] = useState(0)
   const [clipboard, setClipboard] = useState<Clipboard | null>(null)
@@ -96,6 +99,11 @@ export function App() {
         <img src="/icon.svg" width={20} height={20} alt="" />
         <span className="brand">{t.appName}</span>
         <span className="grow" />
+        <button className="icon-btn" onClick={cycleTheme}
+          title={theme === 'system' ? 'Tema: sistem (açık/koyu cihaza göre)' : theme === 'light' ? 'Tema: açık' : 'Tema: koyu'}
+          aria-label="Temayı değiştir">
+          {theme === 'system' ? <Monitor size={18} /> : theme === 'light' ? <Sun size={18} /> : <Moon size={18} />}
+        </button>
         <div className="user">
           <button className="user-btn" onClick={() => setUserMenu(m => !m)}><UserCircle2 size={18} /> <span className="hide-sm">{auth.user}</span></button>
           {userMenu && (
