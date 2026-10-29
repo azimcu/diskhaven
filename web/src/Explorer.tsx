@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronRight, ClipboardPaste, Copy, Download, FolderOpen, FolderPlus,
-  FolderUp, LayoutGrid, Link2, List, MoreVertical, PanelRight, Pencil, RefreshCw, Scissors, Search, Trash2, Upload,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
+  FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, Link2, List, MoreVertical, PanelRight, Pencil,
+  RefreshCw, Rows3, Scissors, Search, Trash2, Upload,
 } from 'lucide-react'
 import { api } from './api'
 import { toast, toastError } from './dialogs'
 import { FileIcon } from './FileIcon'
 import { formatDate, formatSize, nameOf, parentOf, previewKind, typeName, uniqueName } from './format'
 import { PreviewModal, PreviewPane } from './Preview'
+import { propertiesDialog } from './Properties'
+import { SystemGauge } from './SystemGauge'
 import { shareDialog } from './Sharing'
 import { t } from './strings'
 import type { FileEntry } from './types'
@@ -39,7 +42,14 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
   const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: 'name', asc: true })
-  const [view, setView] = useState(() => readPref('hv.view', 'details'))
+  // view: details (columns), list (compact names) or icons; icon size comes from the slider (Ctrl + wheel too)
+  const [view, setViewState] = useState(() => { const v = readPref('hv.view', 'details'); return v === 'list' || v === 'icons' ? v : 'details' })
+  const setView = (v: string) => { setViewState(v); writePref('hv.view', v) }
+  const [iconSize, setIconSizeState] = useState(() => Math.min(256, Math.max(32, Number(readPref('hv.size', '80')) || 80)))
+  const setIconSize = (n: number) => { const v = Math.min(256, Math.max(32, Math.round(n))); setIconSizeState(v); writePref('hv.size', String(v)) }
+  const [showHidden, setShowHiddenState] = useState(() => readPref('hv.hidden', '0') === '1')
+  const setShowHidden = (v: boolean) => { setShowHiddenState(v); writePref('hv.hidden', v ? '1' : '0') }
+  const [viewMenu, setViewMenu] = useState(false)
   const [pane, setPane] = useState(() => readPref('hv.pane', '0') === '1')
   const [filter, setFilter] = useState('')
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -86,10 +96,10 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   useEffect(() => { listRef.current?.focus({ preventScroll: true }) }, [path])
 
   const shown = useMemo(() => {
-    if (results) return results.entries.filter(e => !e.hidden)
+    if (results) return results.entries.filter(e => showHidden || !e.hidden)
     if (!entries) return []
     const f = filter.trim().toLocaleLowerCase('tr-TR')
-    const list = entries.filter(e => !e.hidden && (!f || e.name.toLocaleLowerCase('tr-TR').includes(f)))
+    const list = entries.filter(e => (showHidden || !e.hidden) && (!f || e.name.toLocaleLowerCase('tr-TR').includes(f)))
     const dir = sort.asc ? 1 : -1
     return list.sort((a, b) => {
       if (a.kind !== b.kind) return a.kind === 'Folder' ? -1 : 1 // folders always first, like Explorer
@@ -99,7 +109,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
       else if (sort.key === 'type') c = collator.compare(typeName(a), typeName(b))
       return (c || collator.compare(a.name, b.name)) * dir
     })
-  }, [entries, filter, sort, results])
+  }, [entries, filter, sort, results, showHidden])
 
   const sel = shown.filter(e => selected.has(e.path))
   const single = sel.length === 1 ? sel[0] : null
@@ -113,6 +123,14 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   }
 
   const download = (list: FileEntry[]) => {
+    if (list.length === 0) return
+    if (list.some(x => x.kind === 'Folder') || list.length > 3) {
+      // folders, or many files at once: one ZIP built on the fly, like a cloud drive
+      const a = document.createElement('a')
+      a.href = api.archiveUrl(list.map(x => x.path), list.length === 1 ? list[0].name : path ? nameOf(path) : 'DiskHaven')
+      document.body.appendChild(a); a.click(); a.remove()
+      return
+    }
     for (const e of list.filter(x => x.kind === 'File')) {
       const a = document.createElement('a')
       a.href = api.contentUrl(e.path, true)
@@ -138,19 +156,25 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
     setRenaming(null)
     const name = value.trim()
     if (!name || name === entry.name) return
+    // shown with the new name at once; the server confirms (or the list is reloaded on error)
+    const guess = (parentOf(entry.path) ? parentOf(entry.path) + '/' : '') + name
+    setEntries(list => list && list.map(x => x.path === entry.path ? { ...x, name, path: guess, extension: x.kind === 'File' ? (name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : null) : null } : x))
+    setSelected(new Set([guess]))
     try {
       const r = await api.rename(entry.path, name)
       setSelected(new Set([r.path]))
       load()
       changed()
-    } catch (e) { toastError(e) }
+    } catch (e) { toastError(e); load() }
   }
 
   const remove = async (list: FileEntry[]) => {
     if (list.length === 0) return
+    const gone = new Set(list.map(e => e.path))
+    setEntries(l => l && l.filter(x => !gone.has(x.path)))   // disappears at once; the bin move runs behind
+    setSelected(new Set())
     try {
       const r = await api.remove(list.map(e => e.path))
-      setSelected(new Set())
       load()
       changed()
       toast(t.movedToTrash(r.items.length), {
@@ -163,7 +187,33 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
           },
         },
       })
-    } catch (e) { toastError(e) }
+    } catch (e) { toastError(e); load() }
+  }
+
+  const setHidden = async (list: FileEntry[], hidden: boolean) => {
+    if (list.length === 0) return
+    const paths = new Set(list.map(e => e.path))
+    setEntries(l => l && l.map(x => paths.has(x.path) ? { ...x, hidden } : x))
+    try { await api.setHidden([...paths], hidden); toast(t.hiddenDone(paths.size, hidden)); changed() }
+    catch (e) { toastError(e); load() }
+  }
+
+  const compress = async (list: FileEntry[]) => {
+    if (list.length === 0) return
+    toast(t.compressing)
+    try { const r = await api.compress(list.map(e => e.path)); load(); changed(); setSelected(new Set([r.path])); setRenaming(r.path) }
+    catch (e) { toastError(e) }
+  }
+
+  const extract = async (e: FileEntry) => {
+    toast(t.extracting)
+    try { const r = await api.extract(e.path); load(); changed(); setSelected(new Set([r.path])) }
+    catch (err) { toastError(err) }
+  }
+
+  const copyPath = (list: FileEntry[]) => {
+    const text = list.map(e => `"/${e.path}"`).join('\n')
+    navigator.clipboard?.writeText(text).then(() => toast('Yol kopyalandı')).catch(() => {})
   }
 
   const toClipboard = (mode: Clipboard['mode'], list: FileEntry[]) => {
@@ -249,12 +299,14 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
     else if (k === 'ArrowLeft' && e.altKey) { handled(); history.back() }
     else if (k === 'ArrowRight' && e.altKey) { handled(); history.forward() }
     else if (k === 'Backspace') { handled(); history.back() }
+    else if (k === 'Enter' && e.altKey && single) { handled(); void propertiesDialog(single, load) }
     else if (k === 'Enter' && single) { handled(); open(single) }
     else if (k === 'Delete') { handled(); void remove(sel) }
     else if (k === 'F2' && single) { handled(); setRenaming(single.path) }
     else if (k === 'F5') { handled(); load() }
     else if (k === 'Escape') { setSelected(new Set()); setMenu(null) }
     else if (mod && k.toLowerCase() === 'a') { handled(); setSelected(new Set(shown.map(x => x.path))) }
+    else if (mod && e.shiftKey && k.toLowerCase() === 'c') { handled(); copyPath(sel) }
     else if (mod && k.toLowerCase() === 'c') { handled(); toClipboard('copy', sel) }
     else if (mod && k.toLowerCase() === 'x') { handled(); toClipboard('cut', sel) }
     else if (mod && k.toLowerCase() === 'v') { handled(); void paste() }
@@ -293,8 +345,32 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
         <button className="cmd icon-only" disabled={!sel.length} onClick={() => remove(sel)} title={`${t.delete} (Del)`}><Trash2 size={16} /></button>
         <button className="cmd icon-only" disabled={!sel.some(e => e.kind === 'File')} onClick={() => download(sel)} title={t.download}><Download size={16} /></button>
         <span className="cmd-grow" />
-        <button className={`cmd icon-only ${view === 'details' ? 'on' : ''}`} onClick={() => { setView('details'); writePref('hv.view', 'details') }} title={t.details}><List size={16} /></button>
-        <button className={`cmd icon-only ${view === 'icons' ? 'on' : ''}`} onClick={() => { setView('icons'); writePref('hv.view', 'icons') }} title={t.largeIcons}><LayoutGrid size={16} /></button>
+        {view === 'icons' && (
+          <label className="size-slider hide-sm" title={`${t.iconSize} (Ctrl + fare tekerleği)`}>
+            <LayoutGrid size={12} />
+            <input type="range" min={32} max={256} step={4} value={iconSize} onChange={e => setIconSize(Number(e.target.value))} aria-label={t.iconSize} />
+            <LayoutGrid size={17} />
+          </label>
+        )}
+        <div className="view-pick">
+          <button className="cmd" onClick={e => { e.stopPropagation(); setViewMenu(m => !m) }} title={t.viewMode} aria-expanded={viewMenu}>
+            {view === 'icons' ? <LayoutGrid size={16} /> : view === 'list' ? <Rows3 size={16} /> : <List size={16} />} <ChevronDown size={13} />
+          </button>
+          {viewMenu && (
+            <>
+              <div className="menu-backdrop" onMouseDown={() => setViewMenu(false)} />
+              <div className="menu view-menu" role="menu" onClick={() => setViewMenu(false)}>
+                <button className="menu-item" onClick={() => setView('icons')}><span className="menu-ic">{view === 'icons' ? <Check size={15} /> : <LayoutGrid size={16} />}</span>{t.viewGrid}</button>
+                <button className="menu-item" onClick={() => setView('list')}><span className="menu-ic">{view === 'list' ? <Check size={15} /> : <Rows3 size={16} />}</span>{t.viewList}</button>
+                <button className="menu-item" onClick={() => setView('details')}><span className="menu-ic">{view === 'details' ? <Check size={15} /> : <List size={16} />}</span>{t.viewDetails}</button>
+                <div className="menu-sep" />
+                <div className="menu-slider show-sm-flex"><LayoutGrid size={12} /><input type="range" min={32} max={256} step={4} value={iconSize}
+                  onClick={e => e.stopPropagation()} onChange={e => { setIconSize(Number(e.target.value)); if (view !== 'icons') setView('icons') }} aria-label={t.iconSize} /><LayoutGrid size={17} /></div>
+                <button className="menu-item" onClick={() => setShowHidden(!showHidden)}><span className="menu-ic">{showHidden ? <Check size={15} /> : <Eye size={16} />}</span>{t.showHidden}</button>
+              </div>
+            </>
+          )}
+        </div>
         <button className={`cmd icon-only hide-sm ${pane ? 'on' : ''}`} onClick={() => { setPane(!pane); writePref('hv.pane', pane ? '0' : '1') }} title={t.previewPane}><PanelRight size={16} /></button>
       </div>
 
@@ -339,6 +415,13 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
           className={`list-wrap ${dragOver ? 'dragover' : ''}`}
           tabIndex={0}
           onKeyDown={onKey}
+          style={{ '--tile': `${iconSize}px` } as React.CSSProperties}
+          onWheel={e => {
+            if (!(e.ctrlKey || e.metaKey)) return
+            e.preventDefault()   // Ctrl + wheel resizes icons, like Explorer
+            if (view !== 'icons') setView('icons')
+            setIconSize(iconSize * (e.deltaY < 0 ? 1.12 : 1 / 1.12))
+          }}
           onClick={e => { if (e.target === e.currentTarget) setSelected(new Set()) }}
           onContextMenu={e => { if (!(e.target as HTMLElement).closest('[data-path]')) contextRow(e, null) }}
           onDragOver={e => { e.preventDefault(); setDragOver(true) }}
@@ -362,7 +445,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
               </thead>
               <tbody>
                 {shown.map(e => (
-                  <Row key={e.path} entry={e} selected={selected.has(e.path)} cut={clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)}
+                  <Row key={e.path} entry={e} selected={selected.has(e.path)} cut={(clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)) || e.hidden}
                     location={results ? parentOf(e.path) : undefined}
                     renaming={renaming === e.path} onRename={v => commitRename(e, v)} onCancelRename={() => setRenaming(null)}
                     onClick={ev => clickRow(ev, e)} onDoubleClick={() => open(e)} onContextMenu={ev => contextRow(ev, e)}
@@ -374,18 +457,38 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
             </table>
           )}
 
-          {view === 'icons' && shown.length > 0 && (
-            <div className="grid">
+          {view === 'list' && shown.length > 0 && (
+            <div className="list-view">
               {shown.map(e => (
                 <div key={e.path} data-path={e.path} {...(e.kind === 'Folder' ? { 'data-folder': '' } : {})}
-                  className={`tile ${selected.has(e.path) ? 'sel' : ''} ${clipboard?.mode === 'cut' && clipboard.paths.includes(e.path) ? 'cut' : ''}`}
+                  className={`li ${selected.has(e.path) ? 'sel' : ''} ${(clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)) || e.hidden ? 'cut' : ''}`}
                   draggable onDragStart={ev => dragStart(ev, e)}
                   onDragOver={ev => { if (e.kind === 'Folder') { ev.preventDefault(); ev.currentTarget.classList.add('drop') } }}
                   onDragLeave={ev => ev.currentTarget.classList.remove('drop')}
                   onDrop={ev => { ev.currentTarget.classList.remove('drop'); if (e.kind === 'Folder') { ev.stopPropagation(); onDropItems(e.path, ev) } }}
                   onClick={ev => clickRow(ev, e)} onDoubleClick={() => open(e)} onContextMenu={ev => contextRow(ev, e)}
                   onTouchStart={ev => touchStart(ev, e)} onTouchEnd={touchEnd} onTouchMove={touchEnd}>
-                  <Thumb entry={e} />
+                  <FileIcon entry={e} />
+                  {renaming === e.path
+                    ? <RenameInput entry={e} onDone={v => commitRename(e, v)} onCancel={() => setRenaming(null)} />
+                    : <span className="li-name" title={e.name}>{e.name}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {view === 'icons' && shown.length > 0 && (
+            <div className="grid">
+              {shown.map(e => (
+                <div key={e.path} data-path={e.path} {...(e.kind === 'Folder' ? { 'data-folder': '' } : {})}
+                  className={`tile ${selected.has(e.path) ? 'sel' : ''} ${(clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)) || e.hidden ? 'cut' : ''}`}
+                  draggable onDragStart={ev => dragStart(ev, e)}
+                  onDragOver={ev => { if (e.kind === 'Folder') { ev.preventDefault(); ev.currentTarget.classList.add('drop') } }}
+                  onDragLeave={ev => ev.currentTarget.classList.remove('drop')}
+                  onDrop={ev => { ev.currentTarget.classList.remove('drop'); if (e.kind === 'Folder') { ev.stopPropagation(); onDropItems(e.path, ev) } }}
+                  onClick={ev => clickRow(ev, e)} onDoubleClick={() => open(e)} onContextMenu={ev => contextRow(ev, e)}
+                  onTouchStart={ev => touchStart(ev, e)} onTouchEnd={touchEnd} onTouchMove={touchEnd}>
+                  <Thumb entry={e} size={iconSize} />
                   {renaming === e.path
                     ? <RenameInput entry={e} onDone={v => commitRename(e, v)} onCancel={() => setRenaming(null)} />
                     : <span className="tile-name" title={e.name}>{e.name}</span>}
@@ -401,21 +504,30 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
         <span>{t.items(shown.length)}</span>
         {sel.length > 0 && <span>{t.selected(sel.length)}{selectedSize > 0 ? ` · ${formatSize(selectedSize)}` : ''}</span>}
         <span className="grow" />
+        <SystemGauge />
         {storage && <span className="hide-sm">{t.free(formatSize(storage.free), formatSize(storage.total))}</span>}
       </footer>
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={menu.onItem ? [
           single && { label: single.kind === 'Folder' ? t.open : previewKind(single.extension) ? t.open : t.download, icon: <FolderOpen size={16} />, run: () => open(single) },
-          sel.some(e => e.kind === 'File') && { label: t.download, icon: <Download size={16} />, run: () => download(sel) },
+          single?.extension === 'zip' && { label: t.extract, icon: <FolderInput size={16} />, run: () => extract(single) },
+          { label: sel.length === 1 && single?.kind === 'File' ? t.download : t.downloadZip, icon: <Download size={16} />, run: () => download(sel) },
           'sep',
           { label: t.cut, icon: <Scissors size={16} />, hint: 'Ctrl+X', run: () => toClipboard('cut', sel) },
           { label: t.copy, icon: <Copy size={16} />, hint: 'Ctrl+C', run: () => toClipboard('copy', sel) },
           'sep',
           single && { label: t.rename, icon: <Pencil size={16} />, hint: 'F2', run: () => setRenaming(single.path) },
           single && { label: t.share, icon: <Link2 size={16} />, run: () => void shareDialog(single) },
+          { label: t.compress, icon: <FileArchive size={16} />, run: () => compress(sel) },
+          { label: t.copyPath, icon: <Copy size={16} />, hint: 'Ctrl+Shift+C', run: () => copyPath(sel) },
+          sel.every(e => e.hidden)
+            ? { label: t.unhide, icon: <Eye size={16} />, run: () => setHidden(sel, false) }
+            : { label: t.hide, icon: <EyeOff size={16} />, run: () => setHidden(sel, true) },
           single && results && { label: t.openLocation, icon: <FolderOpen size={16} />, run: () => navigate(parentOf(single.path)) },
           { label: t.delete, icon: <Trash2 size={16} />, hint: 'Del', run: () => remove(sel) },
+          'sep',
+          single && { label: t.properties, icon: <Info size={16} />, hint: 'Alt+Enter', run: () => void propertiesDialog(single, load) },
         ] : [
           { label: t.newFolder, icon: <FolderPlus size={16} />, hint: 'Ctrl+Shift+N', run: newFolder },
           clipboard && { label: t.paste, icon: <ClipboardPaste size={16} />, hint: 'Ctrl+V', run: paste },
@@ -425,6 +537,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
           'sep',
           { label: t.refresh, icon: <RefreshCw size={16} />, hint: 'F5', run: load },
           { label: t.selectAll, hint: 'Ctrl+A', run: () => setSelected(new Set(shown.map(x => x.path))) },
+          { label: t.showHidden, icon: showHidden ? <Check size={15} /> : <Eye size={16} />, run: () => setShowHidden(!showHidden) },
         ]} />
       )}
 
@@ -508,11 +621,11 @@ function RenameInput({ entry, onDone, onCancel }: { entry: FileEntry; onDone: (v
   )
 }
 
-function Thumb({ entry }: { entry: FileEntry }) {
+function Thumb({ entry, size }: { entry: FileEntry; size: number }) {
   const [broken, setBroken] = useState(false)
   if (entry.kind === 'File' && previewKind(entry.extension) === 'image' && !broken)
-    return <img className="thumb" src={api.contentUrl(entry.path)} alt="" loading="lazy" onError={() => setBroken(true)} />
-  return <span className="thumb icon"><FileIcon entry={entry} size={48} /></span>
+    return <img className="thumb" src={api.contentUrl(entry.path)} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} />
+  return <span className="thumb icon"><FileIcon entry={entry} size={Math.round(size * 0.62)} /></span>
 }
 
 type MenuItem = { label: string; icon?: React.ReactNode; hint?: string; run: () => void } | 'sep' | false | null | undefined

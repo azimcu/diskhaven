@@ -98,6 +98,25 @@ public sealed class FileBrowser(VaultRoot root, FolderSizeIndex? sizes = null)
         return full;
     }
 
+    /// <summary>What the Properties dialog shows (like Explorer's General tab).</summary>
+    public ItemProperties Properties(string? relativePath)
+    {
+        var full = Root.Resolve(relativePath);
+        FileSystemInfo info = Directory.Exists(full) ? new DirectoryInfo(full) : new FileInfo(full);
+        if (!info.Exists)
+            throw new FileNotFoundException("Item not found.");
+        var entry = ToEntry(info);
+        DateTimeOffset? created = null;
+        try { created = info.CreationTimeUtc.Year > 1980 ? info.CreationTimeUtc : null; } catch (IOException) { }
+        var readOnly = info is FileInfo fi ? fi.IsReadOnly : false;
+        long? onDisk = null;
+        if (info is FileInfo f2)
+            onDisk = (f2.Length + 4095) / 4096 * 4096;   // allocation size on a 4 KB cluster disk, like "Size on disk"
+        long? driveFree = null;
+        try { driveFree = new DriveInfo(full).AvailableFreeSpace; } catch (Exception e) when (e is IOException or ArgumentException) { }
+        return new ItemProperties(entry, created, info.LastAccessTimeUtc, readOnly, onDisk, driveFree);
+    }
+
     private FileEntry ToEntry(FileSystemInfo info)
     {
         var isDir = info is DirectoryInfo;
@@ -110,7 +129,7 @@ public sealed class FileBrowser(VaultRoot root, FolderSizeIndex? sizes = null)
             isDir ? stats?.Size : ((FileInfo)info).Length,
             info.LastWriteTimeUtc,
             isDir ? null : NullIfEmpty(info.Extension.TrimStart('.').ToLowerInvariant()),
-            info.Name.StartsWith('.') || info.Attributes.HasFlag(FileAttributes.Hidden),
+            HiddenFlag.IsHidden(info),
             stats?.Files,
             stats?.Folders);
     }

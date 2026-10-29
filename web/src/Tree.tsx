@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ChevronRight, HardDrive, Link2, Trash2, Usb } from 'lucide-react'
+import { formatSize } from './format'
+import type { Disk } from './types'
 import { api, folderEntries } from './api'
 import { FileIcon } from './FileIcon'
 import { t } from './strings'
@@ -12,10 +14,21 @@ interface Props {
   onOpenSpecial: (view: 'trash' | 'disks' | 'shares') => void
   isAdmin: boolean
   onDropItems: (dest: string, e: React.DragEvent) => void
+  storage: { total: number; free: number } | null
 }
 
 /** Left navigation pane: folder tree of the NAS (loaded lazily) and the recycle bin. */
-export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin, onDropItems }: Props) {
+export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin, onDropItems, storage }: Props) {
+  // drives, like "This PC": the NAS storage and (for admins) the other disks with their fill level
+  const [disks, setDisks] = useState<Disk[]>([])
+  useEffect(() => {
+    if (!isAdmin) return
+    let alive = true
+    const load = () => api.disks().then(r => alive && setDisks(r.disks)).catch(() => {})
+    load()
+    const timer = window.setInterval(load, 30000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [isAdmin, version])
   // expand the path to the current folder automatically
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']))
   useEffect(() => {
@@ -40,6 +53,18 @@ export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin
   return (
     <nav className="tree" aria-label="Klasörler">
       <TreeNode path="" name={t.thisNas} depth={0} root {...{ current, expanded, toggle, onOpen, version, onDropItems }} />
+      <div className="tree-sep" />
+      <div className="drives" aria-label="Sürücüler">
+        <div className="drives-title">Sürücüler</div>
+        {storage && <Drive name={t.thisNas} icon={<HardDrive size={18} strokeWidth={1.5} />} total={storage.total} free={storage.free}
+          onClick={() => onOpen('')} />}
+        {disks.map(d => (
+          <Drive key={d.id} name={d.name || d.label || d.model} icon={<Usb size={18} strokeWidth={1.5} />}
+            total={d.usage?.total ?? d.size} free={d.usage?.free ?? null} off={d.state !== 'mounted'}
+            note={d.state === 'mounted' ? undefined : d.state === 'off' ? 'kapalı' : 'bağlı değil'}
+            active={special === 'disks'} onClick={() => onOpenSpecial('disks')} />
+        ))}
+      </div>
       <div className="tree-sep" />
       <button className={`tree-row ${special === 'shares' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('shares')}>
         <Link2 size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.shares}</span>
@@ -107,5 +132,19 @@ function TreeNode(props: NodeProps) {
       </div>
       {open && children?.map(c => <TreeNode key={c.path} {...props} path={c.path} name={c.name} depth={depth + 1} root={false} />)}
     </>
+  )
+}
+
+function Drive({ name, icon, total, free, active, off, note, onClick }: {
+  name: string; icon: React.ReactNode; total: number; free: number | null; active?: boolean; off?: boolean; note?: string; onClick: () => void
+}) {
+  const used = free == null || !total ? null : (total - free) / total
+  return (
+    <button className={`drive ${active ? 'active' : ''} ${off ? 'off' : ''}`} onClick={onClick} title={name}>
+      <span className="ic">{icon}</span>
+      <b>{name}</b>
+      {used != null && <span className={`bar ${used > 0.9 ? 'full' : ''}`}><i style={{ width: `${Math.round(used * 100)}%` }} /></span>}
+      <small>{used != null ? `${formatSize(free)} boş / ${formatSize(total)}` : note ?? formatSize(total)}</small>
+    </button>
   )
 }

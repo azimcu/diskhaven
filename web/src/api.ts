@@ -1,4 +1,4 @@
-import type { AfterSync, AuthState, Disk, FileEntry, Listing, PublicItem, Share, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
+import type { AfterSync, AuthState, Disk, FileEntry, ItemProperties, Listing, SystemSample, PublicItem, Share, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
 import { translateServerMessage } from './strings'
 
 export class ApiError extends Error {
@@ -92,6 +92,15 @@ export const api = {
   removeUser: (name: string) => request<void>('DELETE', `/api/users/${encodeURIComponent(name)}`),
   resetPassword: (name: string, newPassword: string) =>
     request<void>('POST', `/api/users/${encodeURIComponent(name)}/password`, { newPassword }),
+
+  setHidden: (paths: string[], hidden: boolean) => request<void>('POST', '/api/files/hidden', { paths, hidden }),
+  properties: (path: string) => request<ItemProperties>('GET', `/api/files/properties?path=${q(path)}`),
+  checksum: (path: string) => request<{ sha256: string }>('GET', `/api/files/checksum?path=${q(path)}`),
+  compress: (paths: string[], name?: string) => request<{ path: string }>('POST', '/api/files/compress', { paths, name }),
+  extract: (path: string) => request<{ path: string }>('POST', '/api/files/extract', { path }),
+  archiveUrl: (paths: string[], name?: string) =>
+    `/api/files/archive?${paths.map(p => `paths=${q(p)}`).join('&')}${name ? `&name=${q(name)}` : ''}`,
+  systemStats: () => request<SystemSample>('GET', '/api/system/stats'),
 
   contentUrl: (path: string, download = false) => `/api/files/content?path=${q(path)}${download ? '&download=true' : ''}`,
 }

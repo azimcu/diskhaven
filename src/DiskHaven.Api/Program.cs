@@ -36,6 +36,9 @@ builder.Services.AddSingleton<IVaultChangeListener>(sp => sp.GetRequiredService<
 builder.Services.AddSingleton<FileBrowser>();
 builder.Services.AddSingleton<FileOperations>();
 builder.Services.AddSingleton<UploadCommitter>();
+builder.Services.AddSingleton<Archives>();
+builder.Services.AddSingleton<SystemStats>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SystemStats>());
 builder.Services.AddSingleton(new AccountStore(configDir));
 builder.Services.AddSingleton(new ShareStore(configDir));
 builder.Services.AddSingleton(tusStore);
@@ -226,6 +229,64 @@ files.MapGet("/search", (string? path, string q, FileBrowser browser, Cancellati
     var r = browser.Search(path, q, 500, timeout.Token);
     return Results.Ok(new { path = VaultRoot.Normalize(path), entries = r.Entries, truncated = r.Truncated });
 }));
+
+files.MapPost("/hidden", (HiddenRequest req, VaultRoot vault, FileBrowser browser) => Guard(() =>
+{
+    foreach (var p in req.Paths)
+    {
+        var full = vault.Resolve(p);
+        if (full == vault.FullPath || (!File.Exists(full) && !Directory.Exists(full)))
+            throw new FileNotFoundException("Item not found.");
+        HiddenFlag.Set(full, req.Hidden);
+    }
+    return Results.NoContent();
+}));
+
+files.MapGet("/properties", (string path, FileBrowser browser) => Guard(() => Results.Ok(browser.Properties(path))));
+
+files.MapGet("/checksum", async (string path, FileBrowser browser, CancellationToken ct) =>
+{
+    string full;
+    try { full = browser.GetFile(path); }
+    catch (Exception e) when (e is VaultPathException or FileNotFoundException) { return Results.Problem(e.Message, statusCode: 404); }
+    await using var fs = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, FileOptions.SequentialScan);
+    var hash = await System.Security.Cryptography.SHA256.HashDataAsync(fs, ct);
+    return Results.Ok(new { sha256 = Convert.ToHexStringLower(hash) });
+});
+
+files.MapPost("/compress", (CompressRequest req, Archives archives, VaultRoot vault) => Guard(() =>
+{
+    if (demo.Enabled && DemoOptions.FolderBytes(vault.FullPath) >= demo.MaxTotalBytes)
+        throw new IOException("Demo storage is full.");
+    return Results.Ok(new { path = archives.Compress(req.Paths, req.Name) });
+}));
+
+files.MapPost("/extract", (ExtractRequest req, Archives archives, VaultRoot vault) => Guard(() =>
+{
+    var free = demo.Enabled ? Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(vault.FullPath)) : new DriveInfo(vault.FullPath).AvailableFreeSpace;
+    return Results.Ok(new { path = archives.Extract(req.Path, free) });
+}));
+
+files.MapGet("/zip-list", (string path, Archives archives) =>
+    Guard(() => Results.Ok(archives.List(path).Select(e => new { name = e.Name, size = e.Size }))));
+
+// several items or a folder as one ZIP download, built while it is sent (nothing is stored)
+files.MapGet("/archive", async (string[] paths, string? name, HttpContext ctx, Archives archives, VaultRoot vault) =>
+{
+    try { foreach (var p in paths) _ = vault.Resolve(p); }
+    catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: 400); }
+    var file = (string.IsNullOrWhiteSpace(name) ? paths.Length == 1 ? Path.GetFileName(paths[0]) : "DiskHaven" : name) + ".zip";
+    ctx.Response.ContentType = "application/zip";
+    ctx.Response.Headers.ContentDisposition = new System.Net.Mime.ContentDisposition { FileName = file, DispositionType = "attachment" }.ToString();
+    var feature = ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpBodyControlFeature>();
+    if (feature is not null) feature.AllowSynchronousIO = true;   // ZipArchive writes synchronously
+    try { await Task.Run(() => archives.WriteTo(ctx.Response.Body, paths, ctx.RequestAborted)); }
+    catch (Exception e) when (e is FileNotFoundException or OperationCanceledException or IOException) { }
+    return Results.Empty;
+});
+
+// ---- system: live numbers for the corner gauge -----------------------------------------
+app.MapGet("/api/system/stats", (SystemStats stats) => Results.Ok(stats.Last)).RequireAuthorization();
 
 app.MapGet("/api/storage", (VaultRoot vault) =>
 {
@@ -500,6 +561,9 @@ record FolderRequest(string? Parent, string Name);
 record RenameRequest(string Path, string NewName);
 record TransferRequest(string[] Paths, string? Destination);
 record DeleteRequest(string[] Paths);
+record HiddenRequest(string[] Paths, bool Hidden);
+record CompressRequest(string[] Paths, string? Name);
+record ExtractRequest(string Path);
 record AdoptRequest(string Name);
 record DiskSettingsRequest(string? Name, string[]? Folders, SyncSchedule? Schedule, AfterSync? After);
 record ShareRequest(string Path, int? Days);

@@ -83,3 +83,12 @@ export interface SmartInfo {
   available: boolean; passed?: boolean | null; temperature?: number | null; powerOnHours?: number | null
   reallocated?: number | null; pending?: number | null; uncorrectable?: number | null
 }
+
+export interface ItemProperties {
+  entry: FileEntry; created: string | null; accessed: string; readOnly: boolean; sizeOnDisk: number | null; diskFree: number | null
+}
+
+export interface SystemSample {
+  at: string; cpu: number | null; memUsed: number | null; memTotal: number | null; temperature: number | null
+  readPerSec: number | null; writePerSec: number | null; cpuHistory: number[]
+}

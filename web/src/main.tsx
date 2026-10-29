@@ -3,9 +3,11 @@ import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { PublicShare } from './Sharing'
 import './styles.css'
-import { applyTheme, savedTheme } from './theme'
+import { savedTheme } from './theme'
 
-applyTheme(savedTheme())
+// a theme the user picked overrides the device setting; otherwise CSS follows prefers-color-scheme
+const picked = savedTheme()
+if (picked) document.documentElement.setAttribute('data-theme', picked)
 
 // /s/<token> is a share link opened by someone without an account
 const share = location.pathname.match(/^\/s\/([A-Za-z0-9_-]{20,64})\/?$/)

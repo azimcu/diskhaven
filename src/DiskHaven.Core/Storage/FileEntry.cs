@@ -17,3 +17,7 @@ public sealed record FileEntry(
 
 /// <summary>Search hits; <c>Truncated</c> is true when the hit limit was reached.</summary>
 public sealed record SearchResult(IReadOnlyList<FileEntry> Entries, bool Truncated);
+
+/// <summary>Details for the Properties dialog.</summary>
+public sealed record ItemProperties(FileEntry Entry, DateTimeOffset? Created, DateTimeOffset Accessed, bool ReadOnly,
+    long? SizeOnDisk, long? DiskFree);

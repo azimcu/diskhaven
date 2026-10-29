@@ -199,12 +199,12 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 .c-more { width: 0; padding: 0 !important; }
 .c-more .icon-btn { display: none; }
 .rename { width: calc(100% - 30px); height: 26px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); outline: none; vertical-align: middle; user-select: text; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 4px; padding: 8px; }
+.grid { --t: var(--tile, 80px); display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--t) + 32px), 1fr)); gap: 4px; padding: 8px; }
 .tile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 6px; border: 1px solid transparent; border-radius: var(--radius); cursor: default; }
 .tile:hover { background: var(--hover); }
 .tile.sel { background: var(--sel); border-color: var(--sel-border); }
 .tile.drop { border-color: var(--accent); }
-.thumb { width: 80px; height: 80px; object-fit: cover; border-radius: 4px; }
+.thumb { width: var(--t, 80px); height: var(--t, 80px); object-fit: cover; border-radius: 4px; }
 .thumb.icon { display: grid; place-items: center; }
 .tile-name { font-size: 13px; text-align: center; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tile .rename { width: 100%; }
@@ -423,3 +423,67 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 /* public demo instance */
 .demo-bar { background: var(--accent); color: var(--accent-text); font-size: 13px; text-align: center; padding: 4px 12px; }
 .demo-note { border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; margin: 0; }
+
+/* ---- theme: two buttons, the device decides until one is picked */
+.theme-switch { display: inline-flex; padding: 2px; gap: 2px; border-radius: 999px; background: var(--hover); }
+.theme-switch button { display: grid; place-items: center; width: 30px; height: 26px; border: 0; border-radius: 999px; background: none; color: var(--muted); cursor: pointer; }
+.theme-switch button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .15); }
+
+/* ---- view picker and icon size slider */
+.view-pick { position: relative; }
+.view-menu { position: absolute; right: 0; top: 36px; min-width: 220px; }
+.size-slider { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--muted); }
+.size-slider input, .menu-slider input { width: 110px; accent-color: var(--accent); }
+.menu-slider { display: none; align-items: center; gap: 8px; padding: 6px 12px; color: var(--muted); }
+.menu-slider input { flex: 1; }
+.list-view { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1px 8px; padding: 6px 8px; align-content: start; }
+.li { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius); min-width: 0; }
+.li:hover { background: var(--hover); }
+.li.sel { background: var(--sel); border-color: var(--sel-border); }
+.li.drop { border-color: var(--accent); }
+.li.cut { opacity: .5; }
+.li-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.li .rename { flex: 1; }
+
+/* ---- properties dialog */
+.props { width: 100%; }
+.modal:has(.props) { width: min(460px, 94vw); max-width: none; }
+.props-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.props-head b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.props dl { display: grid; grid-template-columns: 9.5em 1fr; gap: 7px 12px; margin: 0; font-size: 13px; }
+.props dt { color: var(--muted); }
+.props dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.props hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
+.props .check { display: inline-flex; align-items: center; gap: 6px; }
+.props .hash { font-size: 11.5px; cursor: copy; word-break: break-all; }
+.btn.small { height: 26px; padding: 0 10px; font-size: 12.5px; }
+.muted { color: var(--muted); }
+
+/* ---- live server gauge in the status bar */
+.gauge { position: relative; display: inline-flex; align-items: center; gap: 10px; height: 22px; padding: 0 8px; border: 0; border-radius: var(--radius); background: none; color: var(--muted); font: inherit; cursor: pointer; }
+.gauge:hover { background: var(--hover); }
+.gauge > span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.gauge .hot { color: var(--danger); }
+.gauge .rw { font-variant-numeric: tabular-nums; }
+.spark-line { fill: none; stroke: var(--accent); stroke-width: 1.4; stroke-linejoin: round; }
+.spark-fill { fill: var(--sel); stroke: none; opacity: .7; }
+.gauge-pop { position: absolute; right: 0; bottom: 28px; z-index: 30; display: flex !important; flex-direction: column; align-items: stretch !important; gap: 6px !important;
+  min-width: 250px; padding: 12px 14px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); color: var(--text); text-align: left; cursor: default; }
+.gauge-pop > span { display: flex; justify-content: space-between; gap: 14px; font-size: 12.5px; color: var(--muted); }
+.gauge-pop em { font-style: normal; color: var(--text); font-variant-numeric: tabular-nums; }
+.gauge-pop small { color: var(--muted); font-size: 11px; }
+
+/* ---- drives in the navigation pane, like "This PC" */
+.drives { padding: 2px 0 6px; }
+.drives-title { font-size: 12px; color: var(--muted); padding: 8px 12px 4px; }
+.drive { display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; align-items: center; width: 100%; padding: 6px 10px 6px 12px; border: 0; background: none; border-radius: var(--radius); text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.drive:hover { background: var(--hover); }
+.drive.active { background: var(--sel); }
+.drive .ic { grid-row: span 3; color: var(--muted); }
+.drive b { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drive small { color: var(--muted); font-size: 11.5px; }
+.bar { height: 5px; border-radius: 3px; background: var(--border-strong); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.bar.full i { background: var(--danger); }
+.drive.off { opacity: .6; }
+@media (max-width: 760px) { .menu-slider.show-sm-flex { display: flex; } }

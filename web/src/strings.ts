@@ -30,6 +30,13 @@ const serverMessages: Record<string, string> = {
   'User not found.': 'Kullanıcı bulunamadı.',
   'The last admin cannot be removed.': 'Son yönetici silinemez.',
   'You cannot remove your own account.': 'Kendi hesabını silemezsin.',
+  'Hiding is not supported on this disk.': 'Bu disk gizleme özelliğini desteklemiyor (ör. exFAT). Adının başına nokta koyarak gizleyebilirsin.',
+  'Nothing to compress.': 'Sıkıştırılacak öğe seçilmedi.',
+  'Items must be in the same folder.': 'Birlikte sıkıştırılacak öğeler aynı klasörde olmalı.',
+  'Not enough free space to extract this archive.': 'Bu arşivi açmak için yeterli boş alan yok.',
+  'This is not a valid ZIP file.': 'Bu geçerli bir ZIP dosyası değil ya da bozuk.',
+  'Archive contains an unsafe path.': 'Arşivde güvenli olmayan bir yol var; açılmadı.',
+  'Demo storage is full.': 'Demo alanı dolu.',
 }
 
 export function translateServerMessage(message: string, status?: number): string {
@@ -44,6 +51,22 @@ export function translateServerMessage(message: string, status?: number): string
 
 export const t = {
   appName: 'DiskHaven',
+  viewMode: 'Görünüm',
+  viewDetails: 'Ayrıntılar',
+  viewList: 'Liste',
+  viewGrid: 'Simgeler',
+  iconSize: 'Simge boyutu',
+  showHidden: 'Gizli öğeleri göster',
+  hide: 'Gizle',
+  unhide: 'Gizlemeyi kaldır',
+  compress: 'ZIP dosyasına sıkıştır',
+  extract: 'Tümünü ayıkla',
+  copyPath: 'Yol olarak kopyala',
+  properties: 'Özellikler',
+  downloadZip: 'ZIP olarak indir',
+  compressing: 'Sıkıştırılıyor…',
+  extracting: 'Ayıklanıyor…',
+  hiddenDone: (n: number, hidden: boolean) => `${n} öğe ${hidden ? 'gizlendi' : 'görünür yapıldı'}`,
   thisNas: 'Bu NAS',
   trash: 'Çöp Kutusu',
   disks: 'Diskler',
