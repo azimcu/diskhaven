@@ -5,6 +5,7 @@ services:
     build: ..
     image: homevault:latest
     container_name: homevault
+    labels: {icon: "http://192.168.1.249:8095/icon.svg"}   # CasaOS simgesi
     user: "${HV_UID}:${HV_GID}"
     restart: unless-stopped
     ports:

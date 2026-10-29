@@ -32,8 +32,9 @@
   font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   font-size: 14px;
 }
+/* dark: follows the system unless the user picked a theme (data-theme on <html>, see theme.ts) */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #202020;
     --surface: #272727;
@@ -63,6 +64,36 @@
     --ic-code: #bdbdbd;
     --ic-file: #a0a0a0;
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #202020;
+  --surface: #272727;
+  --surface-2: #2c2c2c;
+  --border: #383838;
+  --border-strong: #4a4a4a;
+  --text: #ffffff;
+  --muted: #a8a8a8;
+  --accent: #4cc2ff;
+  --accent-text: #000000;
+  --hover: #323232;
+  --sel: #194a6e;
+  --sel-border: #2b6a99;
+  --sel-hover: #1f5a85;
+  --danger: #ff99a4;
+  --ok: #6ccb5f;
+  --shadow: 0 8px 24px rgba(0, 0, 0, .5);
+  --ic-folder: #e8b730;
+  --ic-folder-fill: #f5c542;
+  --ic-image: #4cc2ff;
+  --ic-video: #b48cff;
+  --ic-audio: #ff8a8f;
+  --ic-archive: #d29a6a;
+  --ic-sheet: #5fd38d;
+  --ic-slides: #ff9a76;
+  --ic-doc: #6fa8ff;
+  --ic-code: #bdbdbd;
+  --ic-file: #a0a0a0;
 }
 
 * { box-sizing: border-box; }
