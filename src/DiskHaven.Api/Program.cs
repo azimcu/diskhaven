@@ -414,9 +414,14 @@ publicApi.MapPost("/upload", async (string token, string? name, HttpContext ctx,
         using (var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256))
         {
             var buffer = new byte[1 << 20];
+            var drive = new DriveInfo(vault.FullPath);
+            long written = 0;
             int n;
             while ((n = await ctx.Request.Body.ReadAsync(buffer, ct)) > 0)
             {
+                // the announced length can be missing or wrong: keep the 1 GB reserve while the bytes arrive
+                if ((written += n) % (256L << 20) < n && drive.AvailableFreeSpace - n < (1L << 30))
+                    return Results.Problem("Not enough free space.", statusCode: StatusCodes.Status507InsufficientStorage);
                 sha.AppendData(buffer, 0, n);
                 await file.WriteAsync(buffer.AsMemory(0, n), ct);
             }
@@ -425,7 +430,8 @@ publicApi.MapPost("/upload", async (string token, string? name, HttpContext ctx,
         var result = await committer.CommitAsync(temp, share.Path, name, hash, null, ct);
         shares.CountUpload(share.Id);
         Telemetry.Uploads.Add(1);
-        return Results.Ok(new { name = Path.GetFileName(result.Path), size = result.Size });   // never the vault path
+        // only the size: the stored name (maybe "x (2).txt") would tell a visitor what is already in the folder
+        return Results.Ok(new { size = result.Size });
     }
     catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status400BadRequest); }
     catch (DirectoryNotFoundException) { return Results.Problem("This link has expired or was removed.", statusCode: StatusCodes.Status404NotFound); }
