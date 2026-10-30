@@ -36,6 +36,7 @@ builder.Services.AddSingleton<IVaultChangeListener>(sp => sp.GetRequiredService<
 builder.Services.AddSingleton<FileBrowser>();
 builder.Services.AddSingleton<FileOperations>();
 builder.Services.AddSingleton<UploadCommitter>();
+builder.Services.AddSingleton<VersionStore>();
 builder.Services.AddSingleton<Archives>();
 builder.Services.AddSingleton(new PluginStore(configDir));
 builder.Services.AddSingleton(new ActivityLog(configDir));
@@ -437,6 +438,21 @@ publicApi.MapPost("/upload", async (string token, string? name, HttpContext ctx,
     finally { if (File.Exists(temp)) File.Delete(temp); }
 });
 
+// ---- previous versions (plugin) -----------------------------------------------------------
+var versionsApi = app.MapGroup("/api/versions").RequireAuthorization().RequiresPlugin("versions");
+versionsApi.MapGet("/", (string path, VersionStore versions) => Guard(() => Results.Ok(versions.List(path))));
+// offered under the file's own name, not the internal id
+versionsApi.MapGet("/content", (string path, string id, VersionStore versions) => Guard(() =>
+    Results.File(versions.Get(path, id), "application/octet-stream", Path.GetFileName(VaultRoot.Normalize(path)), enableRangeProcessing: true)));
+versionsApi.MapPost("/restore", (VersionRequest req, VersionStore versions, VaultRoot vault, IVaultChangeListener sizes) => Guard(() =>
+{
+    var full = vault.Resolve(req.Path);
+    if (File.Exists(full)) sizes.Removing(full);
+    versions.Restore(req.Path, req.Id);
+    sizes.Added(full);
+    return Results.NoContent();
+})).LogsActivity("restore-version");
+
 // ---- users (admin) ----------------------------------------------------------------------
 var usersApi = app.MapGroup("/api/users").RequireAuthorization("admin");
 usersApi.MapGet("/", (AccountStore accounts) =>
@@ -598,7 +614,8 @@ app.MapTus("/api/tus", _ => Task.FromResult(new DefaultTusConfiguration
     },
 })).RequireAuthorization();
 
-app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, UploadCommitter committer, CancellationToken ct) =>
+app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, UploadCommitter committer, PluginStore plugins,
+    VersionStore versions, FileOperations ops, CancellationToken ct) =>
 {
     if (id.Length != 32 || !id.All(char.IsAsciiHexDigitLower))
         return Results.Problem("Invalid upload id.", statusCode: 400);
@@ -610,8 +627,12 @@ app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, Upl
     activity?.SetTag("diskhaven.upload.bytes", length);
     try
     {
+        // "replace": the old file is never just overwritten. With the versions plugin it joins the file's
+        // version history, otherwise it goes to the recycle bin.
+        Action<string>? replace = !req.Replace ? null
+            : plugins.IsInstalled("versions") ? old => versions.Keep(old) : old => ops.Delete([old]);
         var result = await committer.CommitAsync(Path.Combine(uploadDir, id), req.Destination, req.RelativeName,
-            req.Sha256, req.LastModified is { } ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null, ct);
+            req.Sha256, req.LastModified is { } ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null, ct, replace);
         await tusStore.DeleteFileAsync(id, ct); // removes tus side files; the data file was moved
         Telemetry.Uploads.Add(1);
         Telemetry.UploadedBytes.Add(length.Value);
@@ -717,6 +738,7 @@ record UnlockRequest(string? Password);
 sealed class SharePasswordException() : Exception("This link is protected with a password.");
 record NewUserRequest(string UserName, string Password, bool IsAdmin);
 record ResetPasswordRequest(string NewPassword);
-record CommitRequest(string? Destination, string RelativeName, string Sha256, long? LastModified);
+record CommitRequest(string? Destination, string RelativeName, string Sha256, long? LastModified, bool Replace = false);
+record VersionRequest(string Path, string Id);
 
 public partial class Program;

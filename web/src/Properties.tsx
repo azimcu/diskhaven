@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
-import { Modal, mount, toastError } from './dialogs'
+import { confirmDialog, Modal, mount, toast, toastError } from './dialogs'
 import { FileIcon } from './FileIcon'
 import { formatDate, formatSize, parentOf, typeName } from './format'
 import { t } from './strings'
-import type { FileEntry, ItemProperties } from './types'
+import { usePlugins } from './plugins'
+import type { FileEntry, FileVersion, ItemProperties } from './types'
 
 const bytes = (n: number) => `${formatSize(n)} (${n.toLocaleString('tr-TR')} bayt)`
 
@@ -18,6 +19,7 @@ function PropertiesDialog({ entry, onClose }: { entry: FileEntry; onClose: () =>
   const [hidden, setHidden] = useState(entry.hidden)
   const [sha, setSha] = useState<string | null>(null)
   const [hashing, setHashing] = useState(false)
+  const { has } = usePlugins()
   useEffect(() => { api.properties(entry.path).then(r => { setP(r); setHidden(r.entry.hidden) }).catch(toastError) }, [entry.path])
 
   const e = p?.entry ?? entry
@@ -63,8 +65,38 @@ function PropertiesDialog({ entry, onClose }: { entry: FileEntry; onClose: () =>
               : <button className="btn small" disabled={hashing} onClick={hash}>{hashing ? 'Hesaplanıyor…' : 'Hesapla'}</button>}</dd>
           </>}
         </dl>
+        {!folder && has('versions') && <Versions path={e.path} onRestored={onClose} />}
         <div className="modal-actions"><button className="btn primary" autoFocus onClick={onClose}>Tamam</button></div>
       </div>
     </Modal>
+  )
+}
+
+/** "Previous versions": earlier states kept when the file was replaced by an upload. */
+function Versions({ path, onRestored }: { path: string; onRestored: () => void }) {
+  const [list, setList] = useState<FileVersion[] | null>(null)
+  useEffect(() => { api.versions(path).then(setList).catch(() => setList([])) }, [path])
+  const restore = async (v: FileVersion) => {
+    if (!(await confirmDialog(`${formatDate(v.savedAt)} tarihli sürüm geri yüklensin mi? Şu anki hâli de önceki sürümlere eklenir, hiçbir şey kaybolmaz.`, 'Geri yükle'))) return
+    try { await api.restoreVersion(path, v.id); toast('Önceki sürüm geri yüklendi'); onRestored() } catch (err) { toastError(err) }
+  }
+  return (
+    <>
+      <hr />
+      <p className="props-sub">Önceki sürümler</p>
+      {list === null ? <span className="spinner" />
+        : list.length === 0 ? <p className="muted small">Önceki sürüm yok. Bu dosya bir yüklemeyle değiştirildiğinde eski hâli burada 30 gün saklanır.</p>
+        : (
+          <ul className="versions">
+            {list.map(v => (
+              <li key={v.id}>
+                <span>{formatDate(v.savedAt)}<small>{formatSize(v.size)}</small></span>
+                <a className="btn small" href={api.versionUrl(path, v.id)} download>İndir</a>
+                <button className="btn small" onClick={() => restore(v)}>Geri yükle</button>
+              </li>
+            ))}
+          </ul>
+        )}
+    </>
   )
 }

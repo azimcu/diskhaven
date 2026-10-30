@@ -46,6 +46,7 @@ downloaded by the browser and their API answers 404.
 | Share links | Links with an expiry and an optional password, no account needed; a folder link can also be a drop box that only accepts files |
 | Disks and backup | External disks, one-way verified sync, schedules, SMART, power control |
 | Server gauge | Live CPU, memory, temperature and disk read/write in the status bar |
+| Previous versions | Uploading a file whose name is taken asks Replace / Keep both / Skip; a replaced file is kept (20 versions, 30 days) and can be downloaded or restored from Properties |
 | Quick access | Favourites and recently opened files |
 | Activity log | Who changed what and when, searchable in the admin panel |
 | Hidden folder | A separate, encrypted folder tree behind a password, listed under an inconspicuous name; recovery key, decoy password, encrypted copy on backup disks, offline recovery tool ([format](docs/hideaway.md)) |

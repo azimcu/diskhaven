@@ -1,4 +1,4 @@
-import type { ActivityItem, AdminOverview, AfterSync, AuthState, Disk, FileEntry, HideawayState, ItemProperties, Listing, PluginInfo, SystemSample, PublicItem, Share, ShareMode, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
+import type { ActivityItem, AdminOverview, AfterSync, AuthState, Disk, FileEntry, FileVersion, HideawayState, ItemProperties, Listing, PluginInfo, SystemSample, PublicItem, Share, ShareMode, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
 import { translateServerMessage } from './strings'
 
 export class ApiError extends Error {
@@ -61,9 +61,12 @@ export const api = {
   purge: (id: string) => request<void>('DELETE', `/api/trash/${id}`),
   emptyTrash: () => request<void>('DELETE', '/api/trash'),
 
-  commitUpload: (id: string, destination: string, relativeName: string, sha256: string, lastModified: number) =>
+  commitUpload: (id: string, destination: string, relativeName: string, sha256: string, lastModified: number, replace = false) =>
     request<{ path: string; sha256: string; size: number }>('POST', `/api/uploads/${id}/commit`,
-      { destination, relativeName, sha256, lastModified }),
+      { destination, relativeName, sha256, lastModified, replace }),
+  versions: (path: string) => request<FileVersion[]>('GET', `/api/versions?path=${q(path)}`),
+  versionUrl: (path: string, id: string) => `/api/versions/content?path=${q(path)}&id=${encodeURIComponent(id)}`,
+  restoreVersion: (path: string, id: string) => request<void>('POST', '/api/versions/restore', { path, id }),
 
   disks: () => request<{ agent: boolean; demo?: boolean; disks: Disk[]; job: SyncJob | null }>('GET', '/api/disks'),
   diskAction: (id: string, action: 'mount' | 'unmount' | 'standby' | 'power-off' | 'power-on') =>

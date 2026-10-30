@@ -16,6 +16,8 @@ export interface FileEntry {
   folders?: number | null
 }
 
+export interface FileVersion { id: string; savedAt: string; size: number }
+
 export interface Listing {
   path: string
   entries: FileEntry[]

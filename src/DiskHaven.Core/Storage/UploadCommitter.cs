@@ -16,8 +16,12 @@ public sealed class UploadCommitter(VaultRoot root, IVaultChangeListener? listen
     /// <param name="relativeName">File name, or "Sub/Folder/name.ext" when a whole folder was uploaded.</param>
     /// <param name="expectedSha256">Hex SHA-256 computed by the client.</param>
     /// <param name="lastModified">Original modification time to keep, if the client sent one.</param>
+    /// <param name="replaceExisting">When set and a file with the same name exists, this is called with that file's
+    /// vault path to move it out of the way (into its version history or the recycle bin) and the upload takes its
+    /// place. When null, a taken name gets " (2)".</param>
     public async Task<Result> CommitAsync(string receivedFile, string? destination, string relativeName,
-        string expectedSha256, DateTimeOffset? lastModified, CancellationToken ct = default)
+        string expectedSha256, DateTimeOffset? lastModified, CancellationToken ct = default,
+        Action<string>? replaceExisting = null)
     {
         var parts = VaultRoot.Normalize(relativeName).Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0)
@@ -50,8 +54,18 @@ public sealed class UploadCommitter(VaultRoot root, IVaultChangeListener? listen
             RandomAccess.FlushToDisk(handle);
         if (lastModified is { } mtime)
             File.SetLastWriteTimeUtc(receivedFile, mtime.UtcDateTime);
-        var target = Path.Combine(folder, FileNames.Unique(folder, parts[^1]));
-        File.Move(receivedFile, target);
+        string target;
+        var taken = replaceExisting is null ? null
+            : Directory.EnumerateFiles(folder).FirstOrDefault(f => Path.GetFileName(f).Equals(parts[^1], StringComparison.OrdinalIgnoreCase));
+        if (taken is not null)
+        {
+            listener?.Removing(taken);
+            replaceExisting!(root.ToRelative(taken));
+            target = Path.Combine(folder, parts[^1]);
+        }
+        else
+            target = Path.Combine(folder, FileNames.Unique(folder, parts[^1]));
+        File.Move(receivedFile, target);   // throws if the name was taken meanwhile: nothing is overwritten
         listener?.Added(createdTop ?? target);
         return new Result(root.ToRelative(target), actual, new FileInfo(target).Length);
     }

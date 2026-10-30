@@ -14,7 +14,8 @@ import { SystemGauge } from './SystemGauge'
 import { hasPlugin, usePlugins } from './plugins'
 import { t } from './strings'
 import type { FileEntry } from './types'
-import { filesFromInput, uploadEvents, uploads } from './uploads'
+import { uploadFiles } from './conflicts'
+import { filesFromInput, uploadEvents } from './uploads'
 
 export interface Clipboard { mode: 'copy' | 'cut'; paths: string[] }
 type SortKey = 'name' | 'modified' | 'type' | 'size'
@@ -244,7 +245,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
 
   const pickUpload = (folder: boolean) => (folder ? folderInput : fileInput).current?.click()
   const onPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) uploads.add(path, filesFromInput(e.target.files))
+    if (e.target.files) void uploadFiles(path, filesFromInput(e.target.files))
     e.target.value = ''
   }
 

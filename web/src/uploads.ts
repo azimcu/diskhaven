@@ -19,6 +19,8 @@ export interface UploadItem {
   error?: string
   resultPath?: string
   attempts: number
+  /** a file with this name is already there and the person chose "Replace" */
+  replace?: boolean
 }
 
 export interface Batch {
@@ -57,7 +59,7 @@ export const uploads = {
   getSnapshot: () => snapshot,
 
   /** Files with their path relative to the drop target ("Folder/sub/file.jpg" for folder uploads). */
-  add(destination: string, files: { file: File; relativeName: string }[]) {
+  add(destination: string, files: { file: File; relativeName: string; replace?: boolean }[]) {
     if (files.length === 0) return
     const batch: Batch = {
       id: nextId++,
@@ -70,7 +72,7 @@ export const uploads = {
       ...items,
       ...files.map(f => ({
         id: nextId++, batch: batch.id, file: f.file, destination, relativeName: f.relativeName,
-        status: 'queued' as const, progress: 0, attempts: 0,
+        status: 'queued' as const, progress: 0, attempts: 0, replace: f.replace,
       })),
     ]
     emit()
@@ -135,7 +137,7 @@ async function run(id: number) {
     // "hideaway:<folder id>" uploads go into the hidden folder, encrypted on commit
     const result = item.destination.startsWith('hideaway:')
       ? await api.hideaway.commit(uploadId, item.destination.slice(9), item.relativeName, sha256, item.file.lastModified)
-      : await api.commitUpload(uploadId, item.destination, item.relativeName, sha256, item.file.lastModified)
+      : await api.commitUpload(uploadId, item.destination, item.relativeName, sha256, item.file.lastModified, item.replace)
     update(id, { status: 'done', progress: 1, resultPath: result.path })
     uploadEvents.dispatchEvent(new CustomEvent('committed', { detail: item.destination }))
   } catch (e) {

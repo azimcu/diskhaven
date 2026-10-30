@@ -3,8 +3,8 @@ using tusdotnet.Stores;
 
 namespace DiskHaven.Api;
 
-/// <summary>Hourly cleanup: recycle bin items older than 30 days, abandoned uploads.</summary>
-public sealed class Housekeeping(FileOperations ops, TusDiskStore uploads, ILogger<Housekeeping> log) : BackgroundService
+/// <summary>Hourly cleanup: recycle bin items and previous versions older than 30 days, abandoned uploads.</summary>
+public sealed class Housekeeping(FileOperations ops, VersionStore versions, TusDiskStore uploads, ILogger<Housekeeping> log) : BackgroundService
 {
     public static readonly TimeSpan TrashRetention = TimeSpan.FromDays(30);
 
@@ -15,10 +15,10 @@ public sealed class Housekeeping(FileOperations ops, TusDiskStore uploads, ILogg
         {
             try
             {
-                var purged = ops.PurgeOlderThan(TrashRetention);
+                var purged = ops.PurgeOlderThan(TrashRetention) + versions.PurgeOlderThan(TrashRetention);
                 var expired = await uploads.RemoveExpiredFilesAsync(ct);
                 if (purged + expired > 0)
-                    log.LogInformation("Housekeeping: {Purged} recycle bin items, {Expired} abandoned uploads removed", purged, expired);
+                    log.LogInformation("Housekeeping: {Purged} recycle bin items and versions, {Expired} abandoned uploads removed", purged, expired);
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {

@@ -141,7 +141,7 @@ function Store() {
 
 const ACTIONS: Record<string, string> = {
   upload: 'Yükledi', folder: 'Klasör oluşturdu', rename: 'Yeniden adlandırdı', move: 'Taşıdı', copy: 'Kopyaladı', delete: 'Sildi',
-  restore: 'Geri yükledi', purge: 'Kalıcı sildi', hide: 'Gizledi / gösterdi', compress: 'Sıkıştırdı', extract: 'Ayıkladı', share: 'Paylaştı', unshare: 'Paylaşımı kaldırdı',
+  restore: 'Geri yükledi', purge: 'Kalıcı sildi', hide: 'Gizledi / gösterdi', compress: 'Sıkıştırdı', extract: 'Ayıkladı', share: 'Paylaştı', unshare: 'Paylaşımı kaldırdı', 'restore-version': 'Önceki sürümü geri yükledi',
 }
 
 function ActivityLog() {

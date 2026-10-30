@@ -19,12 +19,14 @@ public static class PluginCatalog
     [
         new("archive", "ZIP arşivleri", "Seçili öğeleri ZIP dosyasına sıkıştırır, ZIP'leri ayıklar; klasörleri ve çoklu seçimi tek ZIP olarak indirir.",
             "Dosyalar", "1.0.0", true, ["ZIP dosyasına sıkıştır", "Tümünü ayıkla", "ZIP olarak indir"]),
-        new("sharing", "Paylaşım bağlantıları", "Dosya ve klasörler için hesap gerektirmeyen, süreli, salt okunur bağlantılar.",
-            "Paylaşım", "1.0.0", true, ["Bağlantı oluştur", "Süre sınırı", "Paylaşılanlar listesi"]),
+        new("sharing", "Paylaşım bağlantıları", "Dosya ve klasörler için hesap gerektirmeyen, süreli bağlantılar; isteğe bağlı parola ve klasöre dosya toplama.",
+            "Paylaşım", "1.1.0", true, ["Bağlantı oluştur", "Süre sınırı", "Parola", "Dosya toplama kutusu", "Paylaşılanlar listesi"]),
         new("disks", "Diskler ve yedekleme", "Harici diskleri tanır, klasörleri diske eşitler, zamanlar, SMART sağlık bilgisi ve güç aç/kapa.",
             "Depolama", "1.0.0", true, ["Disk eşitleme", "Zamanlama", "SMART", "Güç yönetimi"]),
         new("gauge", "Sunucu göstergesi", "Durum çubuğunda canlı işlemci, bellek, sıcaklık ve disk okuma/yazma hızı.",
             "Sistem", "1.0.0", true, ["Canlı ölçümler", "2 dakikalık işlemci grafiği"]),
+        new("versions", "Önceki sürümler", "Aynı adla yüklenen dosya eskisinin yerini aldığında eski hâli saklanır; Özellikler penceresinden indirilir ya da geri yüklenir.",
+            "Dosyalar", "1.0.0", true, ["Değiştir / İkisini de tut / Atla", "Dosya başına 20 sürüm", "30 gün saklama", "Tek tıkla geri yükle"]),
         new("quick", "Hızlı erişim", "Favoriler ve son kullanılanlar: sık açtığın klasör ve dosyalar sol menüde bir tık uzakta.",
             "Dosyalar", "1.0.0", true, ["Favorilere ekle", "Son kullanılanlar"]),
         new("activity", "Etkinlik günlüğü", "Kim, ne zaman, hangi dosyada ne yaptı: yükleme, silme, taşıma, paylaşım. Yönetici panelinde aranabilir.",
@@ -48,7 +50,13 @@ public sealed class PluginStore
     {
         public HashSet<string> Installed { get; set; } = [];
         public Dictionary<string, JsonObject> Settings { get; set; } = [];
+        /// <summary>Plugins this server has already seen, so a newly released default plugin is installed once on
+        /// upgrade while one the admin removed stays removed.</summary>
+        public HashSet<string> Known { get; set; } = [];
     }
+
+    // plugins released after v0.4, when plugins.json did not yet record which ones it had seen
+    private static readonly string[] AddedAfterV04 = ["versions"];
 
     public PluginStore(string configDir)
     {
@@ -56,6 +64,14 @@ public sealed class PluginStore
         _state = File.Exists(_file)
             ? JsonSerializer.Deserialize<State>(File.ReadAllText(_file)) ?? new State()
             : new State { Installed = PluginCatalog.All.Where(p => p.DefaultInstalled).Select(p => p.Id).ToHashSet() };
+        if (File.Exists(_file) && _state.Known.Count == 0)
+            _state.Known = PluginCatalog.All.Select(p => p.Id).Except(AddedAfterV04).ToHashSet();
+        var fresh = PluginCatalog.All.Where(p => !_state.Known.Contains(p.Id)).ToList();
+        foreach (var p in fresh.Where(p => p.DefaultInstalled && File.Exists(_file)))
+            _state.Installed.Add(p.Id);
+        _state.Known.UnionWith(PluginCatalog.All.Select(p => p.Id));
+        if (fresh.Count > 0 && File.Exists(_file))
+            Save();
     }
 
     public bool IsInstalled(string id) { lock (_lock) return _state.Installed.Contains(id); }

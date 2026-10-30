@@ -11,7 +11,8 @@ import { TrashView } from './TrashView'
 import { loadPlugins, usePlugins } from './plugins'
 import { Tree } from './Tree'
 import type { AuthState } from './types'
-import { filesFromDrop, uploads } from './uploads'
+import { uploadFiles } from './conflicts'
+import { filesFromDrop } from './uploads'
 
 // Plugin screens are separate chunks: a plugin that is not installed is never downloaded.
 const DisksView = lazy(() => import('./DisksView').then(m => ({ default: m.DisksView })))
@@ -79,7 +80,7 @@ export function App() {
       changed()
       return
     }
-    if (e.dataTransfer.types.includes('Files')) uploads.add(dest, await filesFromDrop(e.dataTransfer))
+    if (e.dataTransfer.types.includes('Files')) await uploadFiles(dest, await filesFromDrop(e.dataTransfer))
   }, [changed])
 
   const changePassword = async () => {
