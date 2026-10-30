@@ -106,6 +106,35 @@ public sealed class VersionStoreTests : IDisposable
     }
 
     [Fact]
+    public void History_follows_rename_move_and_the_recycle_bin()
+    {
+        var ops = new FileOperations(_root, _clock, versions: _versions);
+        Directory.CreateDirectory(Path.Combine(_dir, "Arşiv"));
+        Write("Belgeler/plan.txt", "eski");
+        _versions.Keep("Belgeler/plan.txt");
+        Write("Belgeler/plan.txt", "yeni");
+
+        ops.Rename("Belgeler/plan.txt", "Plan2.txt");
+        Assert.Empty(_versions.List("Belgeler/plan.txt"));
+        Assert.Single(_versions.List("Belgeler/Plan2.txt"));
+
+        ops.Move(["Belgeler"], "Arşiv");   // a whole folder: everything below it moves too
+        Assert.Single(_versions.List("Arşiv/Belgeler/Plan2.txt"));
+
+        var trashed = Assert.Single(ops.Delete(["Arşiv/Belgeler/Plan2.txt"]));
+        Write("Arşiv/Belgeler/Plan2.txt", "başka bir dosya");   // a new file taking the name sees no old history
+        Assert.Empty(_versions.List("Arşiv/Belgeler/Plan2.txt"));
+        File.Delete(Path.Combine(_dir, "Arşiv", "Belgeler", "Plan2.txt"));
+
+        var back = ops.Restore(trashed.Id);
+        Assert.Equal("eski", File.ReadAllText(_versions.Get(back, Assert.Single(_versions.List(back)).Id)));
+
+        var again = Assert.Single(ops.Delete([back]));
+        ops.Purge(again.Id);   // gone for good: the history goes too
+        Assert.Empty(Directory.EnumerateDirectories(Path.Combine(_dir, ".diskhaven", "versions")));
+    }
+
+    [Fact]
     public void Paths_outside_the_vault_are_refused() =>
         Assert.Throws<VaultPathException>(() => _versions.Keep("../dışarı.txt"));
 }

@@ -11,6 +11,9 @@ public sealed record FileVersion(string Id, DateTimeOffset SavedAt, long Size);
 /// moved (one rename, same disk) into .diskhaven/versions/&lt;key&gt;/, where the key is derived from the file's
 /// path. Each folder also holds path.txt so a person browsing the disk can tell which file the versions belong to.
 /// Versions are plain copies of the old file: nothing is converted, any of them can be copied out by hand.
+/// History follows its file: <see cref="Relocate"/> on rename, move and recycle bin round trips, and
+/// <see cref="Forget"/> when the file is removed for good, so a new file that later takes the same name
+/// never shows someone else's old contents.
 /// </summary>
 public sealed class VersionStore(VaultRoot root, TimeProvider? clock = null)
 {
@@ -92,6 +95,51 @@ public sealed class VersionStore(VaultRoot root, TimeProvider? clock = null)
         }
         return removed;
     }
+
+    /// <summary>Key under which a recycle bin item keeps its history (a '?' cannot appear in a vault path).</summary>
+    public static string TrashKey(string trashId) => "?trash/" + trashId;
+
+    /// <summary>Moves the history of <paramref name="from"/> and of everything below it to <paramref name="to"/>.</summary>
+    public void Relocate(string from, string to)
+    {
+        if (!Directory.Exists(Dir))
+            return;
+        lock (_lock)
+        {
+            foreach (var (folder, path) in Folders(from))
+            {
+                var moved = to + path[from.Length..];
+                var target = FolderOf(moved);
+                if (target == folder)   // only the letter case changed
+                {
+                    File.WriteAllText(Path.Combine(folder, "path.txt"), moved);
+                    continue;
+                }
+                Directory.CreateDirectory(target);
+                foreach (var id in Ids(folder))
+                    File.Move(Path.Combine(folder, id), Path.Combine(target, id), overwrite: true);
+                File.WriteAllText(Path.Combine(target, "path.txt"), moved);
+                Directory.Delete(folder, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>Deletes the history of <paramref name="path"/> and of everything below it.</summary>
+    public void Forget(string path)
+    {
+        if (!Directory.Exists(Dir))
+            return;
+        lock (_lock)
+            foreach (var (folder, _) in Folders(path))
+                Directory.Delete(folder, recursive: true);
+    }
+
+    private IEnumerable<(string Folder, string Path)> Folders(string prefix) =>
+        Directory.EnumerateDirectories(Dir)
+            .Select(f => (Folder: f, Path: File.Exists(Path.Combine(f, "path.txt")) ? File.ReadAllText(Path.Combine(f, "path.txt")) : ""))
+            .Where(x => x.Path.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
+                        x.Path.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
     private string FolderOf(string rel) =>
         Path.Combine(Dir, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(rel.ToLowerInvariant())))[..32]);

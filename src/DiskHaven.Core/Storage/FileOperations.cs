@@ -7,7 +7,10 @@ namespace DiskHaven.Core.Storage;
 /// copies are written to a temporary file first and renamed into place, deletes go to the
 /// recycle bin (<c>.diskhaven/trash</c>) instead of being removed.
 /// </summary>
-public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultChangeListener? listener = null)
+/// <para>Previous versions (if kept) follow their file through rename, move, delete and restore, and go
+/// when the file is removed for good.</para>
+public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultChangeListener? listener = null,
+    VersionStore? versions = null)
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
@@ -39,6 +42,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
         listener?.Removing(full);
         MoveEntry(full, target);
         listener?.Added(target);
+        versions?.Relocate(Root.ToRelative(full), Root.ToRelative(target));
         return Root.ToRelative(target);
     }
 
@@ -60,6 +64,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
             listener?.Removing(full);
             MoveEntry(full, target);
             listener?.Added(target);
+            versions?.Relocate(Root.ToRelative(full), Root.ToRelative(target));
             result.Add(Root.ToRelative(target));
         }
         return result;
@@ -108,6 +113,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
             File.WriteAllText(Path.Combine(slot, "info.json"), JsonSerializer.Serialize(item, Json));
             listener?.Removing(full);
             MoveEntry(full, Path.Combine(slot, "item"));
+            versions?.Relocate(item.OriginalPath, VersionStore.TrashKey(id));
             items.Add(item);
         }
         return items;
@@ -137,6 +143,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
         var target = Path.Combine(originalParent, FileNames.Unique(originalParent, item.Name));
         MoveEntry(Path.Combine(slot, "item"), target);
         listener?.Added(createdTop ?? target);
+        versions?.Relocate(VersionStore.TrashKey(id), Root.ToRelative(target));
         Directory.Delete(slot, recursive: true);
         return Root.ToRelative(target);
     }
@@ -146,6 +153,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
     {
         var (slot, _) = TrashSlot(id);
         Directory.Delete(slot, recursive: true);
+        versions?.Forget(VersionStore.TrashKey(id));
     }
 
     /// <summary>Permanently removes recycle bin items older than <paramref name="age"/>. Returns how many.</summary>
