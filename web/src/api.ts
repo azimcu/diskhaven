@@ -1,4 +1,4 @@
-import type { ActivityItem, AdminOverview, AfterSync, AuthState, Disk, FileEntry, HideawayState, ItemProperties, Listing, PluginInfo, SystemSample, PublicItem, Share, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
+import type { ActivityItem, AdminOverview, AfterSync, AuthState, Disk, FileEntry, HideawayState, ItemProperties, Listing, PluginInfo, SystemSample, PublicItem, Share, ShareMode, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
 import { translateServerMessage } from './strings'
 
 export class ApiError extends Error {
@@ -80,10 +80,28 @@ export const api = {
   syncHistory: (id: string) => request<SyncReport[]>('GET', `/api/disks/${encodeURIComponent(id)}/history`),
 
   shares: () => request<Share[]>('GET', '/api/shares'),
-  createShare: (path: string, days: number | null) => request<Share>('POST', '/api/shares', { path, days }),
+  createShare: (path: string, days: number | null, mode: ShareMode = 'View', password: string | null = null) =>
+    request<Share>('POST', '/api/shares', { path, days, mode, password }),
   revokeShare: (id: string) => request<void>('DELETE', `/api/shares/${id}`),
   shareUrl: (token: string) => `${location.origin}/s/${token}`,
   publicItem: (token: string, path: string) => request<PublicItem>('GET', `/api/public/${encodeURIComponent(token)}?path=${q(path)}`),
+  unlockShare: (token: string, password: string) => request<void>('POST', `/api/public/${encodeURIComponent(token)}/unlock`, { password }),
+  /** Sends one file into a drop-box link. XHR rather than fetch, for upload progress. */
+  dropFile: (token: string, file: File, onProgress: (sent: number) => void) => new Promise<void>((resolve, reject) => {
+    const x = new XMLHttpRequest()
+    x.open('POST', `/api/public/${encodeURIComponent(token)}/upload?name=${q(file.name)}`)
+    x.setRequestHeader('X-DiskHaven', '1')
+    x.setRequestHeader('Content-Type', 'application/octet-stream')
+    x.upload.onprogress = e => onProgress(e.loaded)
+    x.onload = () => {
+      if (x.status >= 200 && x.status < 300) return resolve()
+      let message = x.statusText
+      try { const p = JSON.parse(x.responseText); message = p.detail || p.title || message } catch { /* not JSON */ }
+      reject(new ApiError(translateServerMessage(message, x.status), x.status))
+    }
+    x.onerror = () => reject(new ApiError(translateServerMessage('network'), 0))
+    x.send(file)
+  }),
   publicContentUrl: (token: string, path: string, download = false) =>
     `/api/public/${encodeURIComponent(token)}/content?path=${q(path)}${download ? '&download=true' : ''}`,
 

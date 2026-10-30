@@ -69,8 +69,11 @@ public static class ActivityEndpoints
             string? detail = null;
             foreach (var arg in ctx.Arguments)
             {
-                if (arg is null) continue;
-                var node = JsonSerializer.SerializeToNode(arg) as JsonObject;
+                // only the request bodies (records declared in this assembly); services and the user are not data
+                if (arg is null || arg.GetType().Assembly != typeof(ActivityLog).Assembly || arg is ActivityLog) continue;
+                JsonObject? node;
+                try { node = JsonSerializer.SerializeToNode(arg) as JsonObject; }
+                catch (Exception e) when (e is JsonException or NotSupportedException or InvalidOperationException) { continue; }
                 if (node is null) continue;
                 foreach (var key in new[] { "Path", "Paths", "Parent", "Destination", "RelativeName" })
                 {
@@ -79,6 +82,11 @@ public static class ActivityEndpoints
                     {
                         if (key is "Destination" or "Parent") detail = "→ /" + str; else paths.Add(str);
                     }
+                }
+                if (node["Name"] is JsonValue nv && nv.TryGetValue<string>(out var made) && made.Length > 0)   // new folder
+                {
+                    paths.Add(detail is { } d ? d["→ /".Length..] + "/" + made : made);
+                    detail = null;
                 }
                 if (node["NewName"] is JsonValue nn && nn.TryGetValue<string>(out var newName)) detail = "→ " + newName;
             }

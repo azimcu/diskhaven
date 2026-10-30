@@ -38,14 +38,18 @@ export interface AuthState {
   demo?: { userName: string; password: string } | null
 }
 
+export type ShareMode = 'View' | 'UploadOnly'
+
 export interface Share {
   id: string; token: string; path: string; kind: EntryKind; createdBy: string
   createdAt: string; expiresAt: string | null; downloads: number
+  mode: ShareMode; hasPassword: boolean; uploads: number
 }
 
-export interface PublicItem {
-  name: string; kind: EntryKind; size: number | null; by: string; expiresAt: string | null
-  entries: FileEntry[] | null
+/** A link's public view; `locked` alone means the password has not been entered yet. */
+export type PublicItem = { locked: true } | {
+  locked?: false; name: string; kind: EntryKind; size: number | null; by: string; expiresAt: string | null
+  mode: ShareMode; entries: FileEntry[] | null
 }
 
 export interface UserInfo { userName: string; isAdmin: boolean; createdAt: string }

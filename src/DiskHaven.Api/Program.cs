@@ -316,37 +316,69 @@ trash.MapDelete("/", (FileOperations ops) =>
 });
 
 // ---- share links ------------------------------------------------------------------------
+// the owner's view of a link: everything but the password hash
+static object ShareView(Share s) => new
+{
+    s.Id, s.Token, s.Path, s.Kind, s.CreatedBy, s.CreatedAt, s.ExpiresAt, s.Downloads, s.Mode, s.HasPassword, s.Uploads,
+};
 var sharesApi = app.MapGroup("/api/shares").RequireAuthorization().RequiresPlugin("sharing");
-sharesApi.MapGet("/", (ShareStore shares) => Results.Ok(shares.List()));
+sharesApi.MapGet("/", (ShareStore shares) => Results.Ok(shares.List().Select(ShareView)));
 sharesApi.MapPost("/", (ShareRequest req, ClaimsPrincipal user, ShareStore shares, VaultRoot vault) => Guard(() =>
 {
     var full = vault.Resolve(req.Path);
     var kind = Directory.Exists(full) ? EntryKind.Folder : File.Exists(full) ? EntryKind.File
         : throw new FileNotFoundException("Item not found.");
     TimeSpan? life = req.Days is > 0 ? TimeSpan.FromDays(req.Days.Value) : null;
-    return Results.Ok(shares.Create(req.Path, kind, user.Identity!.Name!, life));
+    try { return Results.Ok(ShareView(shares.Create(req.Path, kind, user.Identity!.Name!, life, req.Mode ?? ShareMode.View, req.Password))); }
+    catch (ArgumentException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status400BadRequest); }
 })).LogsActivity("share");
 sharesApi.MapDelete("/{id}", (string id, ShareStore shares) => Guard(() => { shares.Revoke(id); return Results.NoContent(); })).LogsActivity("unshare");
 
-// public side of a link: no login, read-only, only the shared item and what is inside it
-var publicApi = app.MapGroup("/api/public/{token}").RequireRateLimiting("public").RequiresPlugin("sharing");
-publicApi.MapGet("/", (string token, string? path, ShareStore shares, FileBrowser browser, VaultRoot vault) => Guard(() =>
+// public side of a link: no login, only the shared item and what is inside it.
+// A password-protected link answers only after the password was entered (a cookie scoped to this link).
+static string UnlockCookie(Share s) => "dh_s_" + s.Id;
+Share OpenShare(string token, HttpContext ctx, ShareStore shares)
 {
     var share = shares.Find(token) ?? throw new KeyNotFoundException("This link has expired or was removed.");
-    var target = ShareStore.Inside(share, path);
+    if (!shares.IsUnlocked(share, ctx.Request.Cookies[UnlockCookie(share)]))
+        throw new SharePasswordException();
+    return share;
+}
+var publicApi = app.MapGroup("/api/public/{token}").RequireRateLimiting("public").RequiresPlugin("sharing");
+publicApi.MapGet("/", (string token, string? path, HttpContext ctx, ShareStore shares, FileBrowser browser, VaultRoot vault) => Guard(() =>
+{
+    var share = shares.Find(token) ?? throw new KeyNotFoundException("This link has expired or was removed.");
+    if (!shares.IsUnlocked(share, ctx.Request.Cookies[UnlockCookie(share)]))
+        return Results.Ok(new { locked = true });   // nothing about the item before the password
+    var target = ShareStore.Inside(share, share.Mode == ShareMode.UploadOnly ? null : path);
     var full = vault.Resolve(target);
     var name = Path.GetFileName(full);
     var by = share.CreatedBy;
+    if (share.Mode == ShareMode.UploadOnly)   // a drop box never shows what is already in the folder
+        return Results.Ok(new { name, kind = EntryKind.Folder, size = (long?)null, by, expiresAt = share.ExpiresAt, mode = share.Mode, entries = (object?)null });
     if (File.Exists(full))
-        return Results.Ok(new { name, kind = EntryKind.File, size = new FileInfo(full).Length, by, expiresAt = share.ExpiresAt, entries = (object?)null });
+        return Results.Ok(new { name, kind = EntryKind.File, size = new FileInfo(full).Length, by, expiresAt = share.ExpiresAt, mode = share.Mode, entries = (object?)null });
     var prefix = share.Path.Length + 1;
     var entries = browser.List(target).Where(e => !e.Hidden)
         .Select(e => e with { Path = e.Path[prefix..] });   // paths relative to the shared folder, never the vault
-    return Results.Ok(new { name, kind = EntryKind.Folder, size = (long?)null, by, expiresAt = share.ExpiresAt, entries = (object?)entries });
+    return Results.Ok(new { name, kind = EntryKind.Folder, size = (long?)null, by, expiresAt = share.ExpiresAt, mode = share.Mode, entries = (object?)entries });
 }));
-publicApi.MapGet("/content", (string token, string? path, bool? download, HttpContext ctx, ShareStore shares, FileBrowser browser) => Guard(() =>
+publicApi.MapPost("/unlock", (string token, UnlockRequest req, HttpContext ctx, ShareStore shares) => Guard(() =>
 {
     var share = shares.Find(token) ?? throw new KeyNotFoundException("This link has expired or was removed.");
+    if (shares.Unlock(share, req.Password ?? "") is not { } value)
+        return Results.Problem("Wrong link password.", statusCode: StatusCodes.Status403Forbidden);
+    ctx.Response.Cookies.Append(UnlockCookie(share), value, new CookieOptions
+    {
+        HttpOnly = true, SameSite = SameSiteMode.Strict, Secure = ctx.Request.IsHttps, Path = $"/api/public/{token}",
+    });
+    return Results.NoContent();
+})).RequireRateLimiting("login");   // guessing the password is as slow as guessing an account's
+publicApi.MapGet("/content", (string token, string? path, bool? download, HttpContext ctx, ShareStore shares, FileBrowser browser) => Guard(() =>
+{
+    var share = OpenShare(token, ctx, shares);
+    if (share.Mode == ShareMode.UploadOnly)
+        return Results.Problem("This link only accepts files.", statusCode: StatusCodes.Status403Forbidden);
     var full = browser.GetFile(ShareStore.Inside(share, path));
     if (download == true)
     {
@@ -355,6 +387,50 @@ publicApi.MapGet("/content", (string token, string? path, bool? download, HttpCo
     }
     return ServeFile(ctx, full, download == true);
 }));
+// drop box: the raw request body is one file. It is hashed while it arrives and then placed with the
+// same committer as a normal upload, so it never overwrites anything (a taken name gets " (2)").
+publicApi.MapPost("/upload", async (string token, string? name, HttpContext ctx, ShareStore shares, UploadCommitter committer,
+    VaultRoot vault, CancellationToken ct) =>
+{
+    Share share;
+    try { share = OpenShare(token, ctx, shares); }
+    catch (KeyNotFoundException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status404NotFound); }
+    catch (SharePasswordException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status403Forbidden); }
+    if (share.Mode != ShareMode.UploadOnly)
+        return Results.Problem("This link does not accept files.", statusCode: StatusCodes.Status403Forbidden);
+    try { FileNames.Validate(name); }
+    catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status400BadRequest); }
+    if (name!.Contains('/') || name.Contains('\\'))
+        return Results.Problem("Invalid file name.", statusCode: StatusCodes.Status400BadRequest);
+    if (ctx.Request.ContentLength is { } announced && announced > new DriveInfo(vault.FullPath).AvailableFreeSpace - (1L << 30))
+        return Results.Problem("Not enough free space.", statusCode: StatusCodes.Status507InsufficientStorage);
+    if (ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } limit)
+        limit.MaxRequestBodySize = 64L << 30;   // one file per request, so the 64 MB chunk limit does not apply
+    var temp = Path.Combine(uploadDir, "drop-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        string hash;
+        await using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20))
+        using (var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256))
+        {
+            var buffer = new byte[1 << 20];
+            int n;
+            while ((n = await ctx.Request.Body.ReadAsync(buffer, ct)) > 0)
+            {
+                sha.AppendData(buffer, 0, n);
+                await file.WriteAsync(buffer.AsMemory(0, n), ct);
+            }
+            hash = Convert.ToHexStringLower(sha.GetHashAndReset());
+        }
+        var result = await committer.CommitAsync(temp, share.Path, name, hash, null, ct);
+        shares.CountUpload(share.Id);
+        Telemetry.Uploads.Add(1);
+        return Results.Ok(new { name = Path.GetFileName(result.Path), size = result.Size });   // never the vault path
+    }
+    catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status400BadRequest); }
+    catch (DirectoryNotFoundException) { return Results.Problem("This link has expired or was removed.", statusCode: StatusCodes.Status404NotFound); }
+    finally { if (File.Exists(temp)) File.Delete(temp); }
+});
 
 // ---- users (admin) ----------------------------------------------------------------------
 var usersApi = app.MapGroup("/api/users").RequireAuthorization("admin");
@@ -613,6 +689,8 @@ static IResult Guard(Func<IResult> action)
     { return Results.Problem(e.Message, statusCode: StatusCodes.Status404NotFound); }
     catch (IOException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
     catch (KeyNotFoundException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status404NotFound); }
+    // 403, not 401: a 401 would send a signed-in owner viewing their own link to the login screen
+    catch (SharePasswordException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status403Forbidden); }
 }
 
 record SetupRequest(string Token, string UserName, string Password);
@@ -629,7 +707,9 @@ record QuickRequest(string Path, bool On = true);
 record PluginToggle(bool Installed);
 record AdoptRequest(string Name);
 record DiskSettingsRequest(string? Name, string[]? Folders, SyncSchedule? Schedule, AfterSync? After);
-record ShareRequest(string Path, int? Days);
+record ShareRequest(string Path, int? Days, ShareMode? Mode = null, string? Password = null);
+record UnlockRequest(string? Password);
+sealed class SharePasswordException() : Exception("This link is protected with a password.");
 record NewUserRequest(string UserName, string Password, bool IsAdmin);
 record ResetPasswordRequest(string NewPassword);
 record CommitRequest(string? Destination, string RelativeName, string Sha256, long? LastModified);

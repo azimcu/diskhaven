@@ -113,6 +113,49 @@ public sealed class ShareStoreTests : IDisposable
         Assert.Throws<VaultPathException>(() => new ShareStore(_dir, _clock).Create("/", EntryKind.Folder, "azim", null));
 
     [Fact]
+    public void Password_link_opens_only_with_the_right_password()
+    {
+        var store = new ShareStore(_dir, _clock);
+        var s = store.Create("Belgeler", EntryKind.Folder, "azim", null, password: "kedi1234");
+        Assert.True(s.HasPassword);
+        Assert.DoesNotContain("kedi1234", File.ReadAllText(Path.Combine(_dir, "shares.json")));
+        Assert.False(store.IsUnlocked(s, null));
+        Assert.Null(store.Unlock(s, "kedi12345"));
+        var cookie = store.Unlock(s, "kedi1234");
+        Assert.NotNull(cookie);
+        Assert.True(store.IsUnlocked(s, cookie));
+        Assert.False(store.IsUnlocked(s, cookie![..^1] + "x"));
+
+        var other = store.Create("Müzik", EntryKind.Folder, "azim", null, password: "kedi1234");
+        Assert.False(store.IsUnlocked(other, cookie));   // a cookie is good for one link only
+        Assert.True(store.IsUnlocked(store.Create("Fotoğraflar", EntryKind.Folder, "azim", null), null));
+    }
+
+    [Fact]
+    public void Too_short_password_is_refused() =>
+        Assert.Throws<ArgumentException>(() => new ShareStore(_dir, _clock).Create("Belgeler", EntryKind.Folder, "azim", null, password: "abc"));
+
+    [Fact]
+    public void Only_a_folder_can_be_a_drop_box()
+    {
+        var store = new ShareStore(_dir, _clock);
+        Assert.Throws<VaultPathException>(() => store.Create("a.pdf", EntryKind.File, "azim", null, ShareMode.UploadOnly));
+        var box = store.Create("Gelen", EntryKind.Folder, "azim", null, ShareMode.UploadOnly);
+        store.CountUpload(box.Id);
+        Assert.Equal((ShareMode.UploadOnly, 1), (new ShareStore(_dir, _clock).Find(box.Token)!.Mode, store.List()[0].Uploads));
+    }
+
+    [Fact]
+    public void Links_saved_before_modes_existed_still_open_as_view_links()
+    {
+        File.WriteAllText(Path.Combine(_dir, "shares.json"), """
+            [{"Id":"ab","Token":"tok-old-0123456789","Path":"Belgeler","Kind":0,"CreatedBy":"azim","CreatedAt":"2026-10-20T09:00:00+00:00","ExpiresAt":null,"Downloads":3}]
+            """);
+        var s = new ShareStore(_dir, _clock).Find("tok-old-0123456789")!;
+        Assert.Equal((ShareMode.View, false, 3), (s.Mode, s.HasPassword, s.Downloads));
+    }
+
+    [Fact]
     public void Links_survive_a_restart()
     {
         var s = new ShareStore(_dir, _clock).Create("Müzik", EntryKind.Folder, "azim", null);

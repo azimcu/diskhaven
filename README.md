@@ -43,7 +43,7 @@ downloaded by the browser and their API answers 404.
 | Plugin | What it adds |
 |---|---|
 | ZIP archives | Compress to ZIP, extract all, download folders / selections as one ZIP |
-| Share links | Read-only links with an expiry, no account needed |
+| Share links | Links with an expiry and an optional password, no account needed; a folder link can also be a drop box that only accepts files |
 | Disks and backup | External disks, one-way verified sync, schedules, SMART, power control |
 | Server gauge | Live CPU, memory, temperature and disk read/write in the status bar |
 | Quick access | Favourites and recently opened files |

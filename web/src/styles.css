@@ -548,3 +548,23 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 .modal:has(.hw-settings) { width: min(520px, 94vw); max-height: calc(100vh - 32px); overflow: auto; }
 details.recent summary { list-style: none; cursor: pointer; }
 details.recent summary::-webkit-details-marker { display: none; }
+
+/* share links: password, drop box */
+.share-form { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
+.share-form .segmented button { display: inline-flex; align-items: center; gap: 6px; }
+.share-pass { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); }
+.share-pass .input { flex: 1; min-width: 0; }
+.card-main .tag { min-width: 0; display: inline-flex; align-items: center; gap: 4px; }
+.public-lock { max-width: 340px; margin: 12vh auto 0; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.public-lock h1 { font-size: 18px; margin: 4px 0 0; }
+.public-lock p { margin: 0 0 6px; }
+.public-lock .input, .public-lock .btn { width: 100%; }
+.dropbox h1 { font-size: 18px; margin: 4px 0 14px; overflow-wrap: anywhere; }
+.drop-zone { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 32px 16px; margin-bottom: 14px; text-align: center;
+  border: 2px dashed var(--border-strong); border-radius: var(--radius); color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+.drop-zone span:not(.btn) { max-width: 46ch; line-height: 1.5; }
+.drop-zone .btn { display: inline-flex; align-items: center; justify-content: center; }
+.drop-zone.over, .drop-zone:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.drop-zone:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dropbox .card-main small { display: inline-flex; align-items: center; gap: 4px; }
+.dropbox .bar { margin-top: 6px; }
