@@ -415,12 +415,11 @@ publicApi.MapPost("/upload", async (string token, string? name, HttpContext ctx,
         {
             var buffer = new byte[1 << 20];
             var drive = new DriveInfo(vault.FullPath);
-            long written = 0;
             int n;
             while ((n = await ctx.Request.Body.ReadAsync(buffer, ct)) > 0)
             {
-                // the announced length can be missing or wrong: keep the 1 GB reserve while the bytes arrive
-                if ((written += n) % (256L << 20) < n && drive.AvailableFreeSpace - n < (1L << 30))
+                // the announced length can be missing or wrong: keep the 1 GB reserve before every 1 MB write
+                if (drive.AvailableFreeSpace - n < (1L << 30))
                     return Results.Problem("Not enough free space.", statusCode: StatusCodes.Status507InsufficientStorage);
                 sha.AppendData(buffer, 0, n);
                 await file.WriteAsync(buffer.AsMemory(0, n), ct);
