@@ -30,14 +30,14 @@ public sealed class SearchTests : IDisposable
     [InlineData("rapor pdf")]
     public void Finds_files_in_subfolders_ignoring_case_and_accents(string q)
     {
-        var r = _browser.Search("", q);
+        var r = _browser.Search("", q, ct: TestContext.Current.CancellationToken);
         Assert.Equal(["Belgeler/Okul/Ödevler/Işık Raporu.pdf"], r.Entries.Select(e => e.Path));
     }
 
     [Fact]
     public void Folders_match_too_and_come_first()
     {
-        var r = _browser.Search("", "odev");
+        var r = _browser.Search("", "odev", ct: TestContext.Current.CancellationToken);
         Assert.Equal("Belgeler/Okul/Ödevler", Assert.Single(r.Entries).Path);
         Assert.Equal(EntryKind.Folder, r.Entries[0].Kind);
     }
@@ -45,23 +45,23 @@ public sealed class SearchTests : IDisposable
     [Fact]
     public void Search_is_limited_to_the_folder_and_never_shows_the_internal_folder()
     {
-        Assert.Empty(_browser.Search("Belgeler/Okul", "fatura").Entries);
-        Assert.Single(_browser.Search("Belgeler", "fatura ekim").Entries);
-        Assert.DoesNotContain(_browser.Search("", "pdf").Entries, e => e.Path.Contains(".diskhaven"));
+        Assert.Empty(_browser.Search("Belgeler/Okul", "fatura", ct: TestContext.Current.CancellationToken).Entries);
+        Assert.Single(_browser.Search("Belgeler", "fatura ekim", ct: TestContext.Current.CancellationToken).Entries);
+        Assert.DoesNotContain(_browser.Search("", "pdf", ct: TestContext.Current.CancellationToken).Entries, e => e.Path.Contains(".diskhaven"));
     }
 
     [Fact]
     public void Hit_limit_marks_the_result_truncated()
     {
         for (var i = 0; i < 12; i++) File.WriteAllText(P($"Belgeler/kopya{i}.txt"), "");
-        var r = _browser.Search("", "kopya", max: 5);
+        var r = _browser.Search("", "kopya", max: 5, ct: TestContext.Current.CancellationToken);
         Assert.Equal(5, r.Entries.Count);
         Assert.True(r.Truncated);
     }
 
     [Fact]
     public void Traversal_in_search_folder_is_rejected() =>
-        Assert.Throws<VaultPathException>(() => _browser.Search("../", "a"));
+        Assert.Throws<VaultPathException>(() => _browser.Search("../", "a", ct: TestContext.Current.CancellationToken));
 }
 
 public sealed class ShareStoreTests : IDisposable

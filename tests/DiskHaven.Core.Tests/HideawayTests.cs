@@ -24,9 +24,9 @@ public sealed class HideawayTests : IDisposable
         var key = HideawayCrypto.NewKey();
         var data = RandomNumberGenerator.GetBytes(size);
         using var enc = new MemoryStream();
-        HideawayCrypto.Encrypt(key, "b1", new MemoryStream(data), enc);
+        HideawayCrypto.Encrypt(key, "b1", new MemoryStream(data), enc, TestContext.Current.CancellationToken);
         using var dec = new MemoryStream();
-        HideawayCrypto.Decrypt(key, "b1", new MemoryStream(enc.ToArray()), dec);
+        HideawayCrypto.Decrypt(key, "b1", new MemoryStream(enc.ToArray()), dec, TestContext.Current.CancellationToken);
         Assert.Equal(data, dec.ToArray());
     }
 
@@ -36,15 +36,15 @@ public sealed class HideawayTests : IDisposable
         var key = HideawayCrypto.NewKey();
         var data = RandomNumberGenerator.GetBytes(2 * HideawayCrypto.ChunkSize + 100);
         using var enc = new MemoryStream();
-        HideawayCrypto.Encrypt(key, "b1", new MemoryStream(data), enc);
+        HideawayCrypto.Encrypt(key, "b1", new MemoryStream(data), enc, TestContext.Current.CancellationToken);
         var bytes = enc.ToArray();
         var flipped = (byte[])bytes.Clone(); flipped[500] ^= 1;
-        Assert.ThrowsAny<CryptographicException>(() => HideawayCrypto.Decrypt(key, "b1", new MemoryStream(flipped), Stream.Null));
+        Assert.ThrowsAny<CryptographicException>(() => HideawayCrypto.Decrypt(key, "b1", new MemoryStream(flipped), Stream.Null, TestContext.Current.CancellationToken));
         // drop the last chunk: the previous one is not marked "last"
         var cut = bytes[..(16 + 2 * (HideawayCrypto.ChunkSize + 16))];
-        Assert.ThrowsAny<CryptographicException>(() => HideawayCrypto.Decrypt(key, "b1", new MemoryStream(cut), Stream.Null));
+        Assert.ThrowsAny<CryptographicException>(() => HideawayCrypto.Decrypt(key, "b1", new MemoryStream(cut), Stream.Null, TestContext.Current.CancellationToken));
         // a blob renamed to another id does not open
-        Assert.ThrowsAny<CryptographicException>(() => HideawayCrypto.Decrypt(key, "b2", new MemoryStream(bytes), Stream.Null));
+        Assert.ThrowsAny<CryptographicException>(() => HideawayCrypto.Decrypt(key, "b2", new MemoryStream(bytes), Stream.Null, TestContext.Current.CancellationToken));
     }
 
     [Fact]

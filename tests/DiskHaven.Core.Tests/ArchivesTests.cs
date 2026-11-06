@@ -23,9 +23,9 @@ public sealed class ArchivesTests : IDisposable
     [Fact]
     public void Compress_then_extract_gives_the_same_tree()
     {
-        var zip = _zip.Compress(["Belgeler"]);
+        var zip = _zip.Compress(["Belgeler"], ct: TestContext.Current.CancellationToken);
         Assert.Equal("Belgeler.zip", zip);
-        var folder = _zip.Extract(zip, long.MaxValue);
+        var folder = _zip.Extract(zip, long.MaxValue, TestContext.Current.CancellationToken);
         Assert.Equal("Belgeler (2)", folder);   // "Belgeler" exists: a numbered folder, like Explorer
         Assert.Equal("merhaba", File.ReadAllText(P("Belgeler (2)/Belgeler/not.txt")));
         Assert.Equal("derin", File.ReadAllText(P("Belgeler (2)/Belgeler/Alt/derin.txt")));
@@ -35,14 +35,14 @@ public sealed class ArchivesTests : IDisposable
     [Fact]
     public void Second_archive_of_the_same_item_gets_a_new_name()
     {
-        _zip.Compress(["Belgeler/not.txt"]);
-        Assert.Equal("Belgeler/not (2).zip", _zip.Compress(["Belgeler/not.txt"]));
+        _zip.Compress(["Belgeler/not.txt"], ct: TestContext.Current.CancellationToken);
+        Assert.Equal("Belgeler/not (2).zip", _zip.Compress(["Belgeler/not.txt"], ct: TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public void Several_items_must_share_a_folder()
     {
-        Assert.Throws<VaultPathException>(() => _zip.Compress(["Belgeler/not.txt", "Belgeler/Alt/derin.txt"]));
+        Assert.Throws<VaultPathException>(() => _zip.Compress(["Belgeler/not.txt", "Belgeler/Alt/derin.txt"], ct: TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -53,7 +53,7 @@ public sealed class ArchivesTests : IDisposable
     {
         using (var z = ZipFile.Open(P("kotu.zip"), ZipArchiveMode.Create))
         using (var w = new StreamWriter(z.CreateEntry(entryName).Open())) w.Write("x");
-        Assert.Throws<VaultPathException>(() => _zip.Extract("kotu.zip", long.MaxValue));
+        Assert.Throws<VaultPathException>(() => _zip.Extract("kotu.zip", long.MaxValue, TestContext.Current.CancellationToken));
         Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(_dir)!, "kacak.txt")));
         Assert.False(Directory.Exists(P("kotu")));
         Assert.Empty(Directory.GetDirectories(P(".diskhaven/tmp")));
@@ -62,15 +62,15 @@ public sealed class ArchivesTests : IDisposable
     [Fact]
     public void Extract_checks_free_space_first()
     {
-        var zip = _zip.Compress(["Belgeler"]);
-        Assert.Throws<IOException>(() => _zip.Extract(zip, 3));
+        var zip = _zip.Compress(["Belgeler"], ct: TestContext.Current.CancellationToken);
+        Assert.Throws<IOException>(() => _zip.Extract(zip, 3, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public void Not_a_zip_is_a_clear_error()
     {
         File.WriteAllText(P("sahte.zip"), "bu bir zip değil");
-        Assert.Throws<IOException>(() => _zip.Extract("sahte.zip", long.MaxValue));
+        Assert.Throws<IOException>(() => _zip.Extract("sahte.zip", long.MaxValue, TestContext.Current.CancellationToken));
     }
 
     [Fact]

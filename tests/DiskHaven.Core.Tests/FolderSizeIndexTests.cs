@@ -20,7 +20,7 @@ public sealed class FolderSizeIndexTests : IDisposable
         _root = new VaultRoot(_dir);
         _index = new FolderSizeIndex(_root);
         _ops = new FileOperations(_root, new FakeTimeProvider(), _index);
-        _index.Scan();
+        _index.Scan(TestContext.Current.CancellationToken);
     }
 
     public void Dispose() => Directory.Delete(_dir, recursive: true);
@@ -31,7 +31,7 @@ public sealed class FolderSizeIndexTests : IDisposable
     {
         Directory.CreateDirectory(P(".diskhaven/trash"));
         File.WriteAllBytes(P(".diskhaven/trash/x"), new byte[1000]);
-        _index.Scan();
+        _index.Scan(TestContext.Current.CancellationToken);
         Assert.Equal(new FolderStats(150, 2, 1), _index.Get("A"));
         Assert.Equal(new FolderStats(157, 3, 3), _index.Get(""));
         Assert.Equal(new FolderStats(0, 0, 0), _index.Get("C"));
@@ -69,7 +69,7 @@ public sealed class FolderSizeIndexTests : IDisposable
         var incremental = _index.Get("");
 
         var fresh = new FolderSizeIndex(_root);
-        fresh.Scan();
+        fresh.Scan(TestContext.Current.CancellationToken);
         Assert.Equal(fresh.Get(""), incremental);
         Assert.Equal(fresh.Get("A2"), _index.Get("A2"));
     }

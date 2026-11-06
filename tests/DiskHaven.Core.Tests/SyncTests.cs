@@ -27,7 +27,7 @@ public sealed class SyncTests : IDisposable
     private async Task<(SyncPlan Plan, SyncReport Report)> Sync(params string[] folders)
     {
         var plan = SyncPlanner.Plan(_src, folders, _dst);
-        var report = await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst);
+        var report = await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst, ct: TestContext.Current.CancellationToken);
         return (plan, report);
     }
 
@@ -52,7 +52,7 @@ public sealed class SyncTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(_dst, "Belgeler/Boş")));
         Assert.False(Directory.Exists(Path.Combine(_dst, SyncExecutor.TempFolder)));
 
-        Assert.True(SyncPlanner.Plan(_src, ["Belgeler"], _dst).IsEmpty);
+        Assert.True(SyncPlanner.Plan(_src, ["Belgeler"], _dst, TestContext.Current.CancellationToken).IsEmpty);
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public sealed class SyncTests : IDisposable
     {
         for (var i = 0; i < 20; i++)
             Write(_src, $"D/f{i}.txt", new string('x', 1000));
-        var plan = SyncPlanner.Plan(_src, ["D"], _dst);
+        var plan = SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken);
         using var cts = new CancellationTokenSource();
         var progress = new SyncProgressHook(p => { if (p.FilesDone == 5) cts.Cancel(); });
         var report = await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst, progress, cts.Token);
@@ -175,8 +175,8 @@ public sealed class SyncMoveTests : IDisposable
 
     private async Task<(SyncPlan, SyncReport)> Sync()
     {
-        var plan = SyncPlanner.Plan(_src, ["D"], _dst);
-        return (plan, await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst));
+        var plan = SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken);
+        return (plan, await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst, ct: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public sealed class SyncMoveTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_dst, "D/Eski")));
         Assert.Empty(Directory.Exists(Path.Combine(_dst, SyncExecutor.TrashFolder))
             ? Directory.GetFiles(Path.Combine(_dst, SyncExecutor.TrashFolder), "*", SearchOption.AllDirectories) : []);
-        Assert.True(SyncPlanner.Plan(_src, ["D"], _dst).IsEmpty);
+        Assert.True(SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken).IsEmpty);
     }
 
     [Fact]
@@ -223,9 +223,9 @@ public sealed class SyncMoveTests : IDisposable
         await Sync();
         File.Delete(Path.Combine(_src, "D/eski.txt"));
         Write("D/yeni.txt", "BBBB"); // same size and time, other content: looks like a move
-        var plan = SyncPlanner.Plan(_src, ["D"], _dst);
+        var plan = SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken);
         Assert.Equal(1, plan.Count(SyncActionKind.Move));
-        var report = await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst);
+        var report = await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst, ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(0, report.Moved);
         Assert.Equal("BBBB", File.ReadAllText(Path.Combine(_dst, "D/yeni.txt")));

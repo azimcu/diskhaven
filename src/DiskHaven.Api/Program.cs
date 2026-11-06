@@ -80,9 +80,11 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         o.Events.OnValidatePrincipal = c =>
         {
             var accounts = c.HttpContext.RequestServices.GetRequiredService<AccountStore>();
-            var account = c.Principal?.Identity?.Name is { } name ? accounts.Find(name) : null;
-            if (account is null || c.Principal!.FindFirstValue("stamp") != AccountStore.Stamp(account) ||
-                c.Principal.IsInRole("admin") != account.IsAdmin)
+            var principal = c.Principal;
+            var account = principal?.Identity?.Name is { } name ? accounts.Find(name) : null;
+            if (account is null || principal is null ||
+                principal.FindFirstValue("stamp") != AccountStore.Stamp(account) ||
+                principal.IsInRole("admin") != account.IsAdmin)
             {
                 c.RejectPrincipal();
                 return c.HttpContext.SignOutAsync();

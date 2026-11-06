@@ -17,7 +17,7 @@ jobs:
         run: |
           git init -q . && git -c "http.extraHeader=Authorization: token ${{ github.token }}" \
             fetch -q --depth 1 "${{ github.server_url }}/${{ github.repository }}" "${{ github.sha }}" && git checkout -q FETCH_HEAD
-      - run: dotnet test DiskHaven.slnx -c Release --logger "console;verbosity=normal"
+      - run: dotnet test --solution DiskHaven.slnx -c Release --output Normal
 
   web:
     runs-on: docker

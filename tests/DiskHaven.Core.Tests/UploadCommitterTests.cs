@@ -31,7 +31,7 @@ public sealed class UploadCommitterTests : IDisposable
     {
         var (file, sha) = Received("içerik"u8.ToArray());
         var mtime = new DateTimeOffset(2021, 3, 4, 5, 6, 7, TimeSpan.Zero);
-        var result = await _committer.CommitAsync(file, "Hedef", "Fotoğraf.jpg", sha.ToUpperInvariant(), mtime);
+        var result = await _committer.CommitAsync(file, "Hedef", "Fotoğraf.jpg", sha.ToUpperInvariant(), mtime, TestContext.Current.CancellationToken);
 
         Assert.Equal("Hedef/Fotoğraf.jpg", result.Path);
         Assert.Equal(sha, result.Sha256);
@@ -44,7 +44,7 @@ public sealed class UploadCommitterTests : IDisposable
     {
         var (file, _) = Received([1, 2, 3]);
         var wrong = Convert.ToHexStringLower(SHA256.HashData([1, 2, 4]));
-        await Assert.ThrowsAsync<ChecksumMismatchException>(() => _committer.CommitAsync(file, "Hedef", "a.bin", wrong, null));
+        await Assert.ThrowsAsync<ChecksumMismatchException>(() => _committer.CommitAsync(file, "Hedef", "a.bin", wrong, null, TestContext.Current.CancellationToken));
         Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(_dir, "Hedef")));
     }
 
@@ -53,7 +53,7 @@ public sealed class UploadCommitterTests : IDisposable
     {
         Directory.CreateDirectory(Path.Combine(_dir, "Hedef", "Tatil"));
         var (file, sha) = Received([9]);
-        var result = await _committer.CommitAsync(file, "Hedef", "TATIL/Gün 1/video.mp4", sha, null);
+        var result = await _committer.CommitAsync(file, "Hedef", "TATIL/Gün 1/video.mp4", sha, null, TestContext.Current.CancellationToken);
         Assert.Equal("Hedef/Tatil/Gün 1/video.mp4", result.Path);
     }
 
@@ -62,7 +62,7 @@ public sealed class UploadCommitterTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_dir, "Hedef", "a.txt"), "eski");
         var (file, sha) = Received("yeni"u8.ToArray());
-        var result = await _committer.CommitAsync(file, "Hedef", "a.txt", sha, null);
+        var result = await _committer.CommitAsync(file, "Hedef", "a.txt", sha, null, TestContext.Current.CancellationToken);
         Assert.Equal("Hedef/a (2).txt", result.Path);
         Assert.Equal("eski", File.ReadAllText(Path.Combine(_dir, "Hedef", "a.txt")));
     }
@@ -74,7 +74,7 @@ public sealed class UploadCommitterTests : IDisposable
     public async Task Bad_names_are_rejected(string name)
     {
         var (file, sha) = Received([1]);
-        await Assert.ThrowsAsync<VaultPathException>(() => _committer.CommitAsync(file, "Hedef", name, sha, null));
+        await Assert.ThrowsAsync<VaultPathException>(() => _committer.CommitAsync(file, "Hedef", name, sha, null, TestContext.Current.CancellationToken));
         Assert.True(File.Exists(file));
     }
 }
