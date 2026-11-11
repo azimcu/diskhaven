@@ -31,6 +31,8 @@ public static class PluginCatalog
             "Dosyalar", "1.0.0", true, ["Favorilere ekle", "Son kullanılanlar"]),
         new("activity", "Etkinlik günlüğü", "Kim, ne zaman, hangi dosyada ne yaptı: yükleme, silme, taşıma, paylaşım. Yönetici panelinde aranabilir.",
             "Güvenlik", "1.0.0", true, ["Etkinlik akışı", "Kullanıcıya ve işleme göre süzme"]),
+        new("gallery", "Galeri", "Android galerisi gibi: her fotoğraf klasörü bir albüm. Fotoğraflar ve albümler, kaydırarak gezinme, taşı / kopyala / sil, yeni albüm, telefondan yükleme. iPhone'da ana ekrana eklenip uygulama gibi açılır.",
+            "Medya", "1.0.0", false, ["Fotoğraflar (tarihe göre)", "Albümler = klasörler", "Albüm gizle / sabitle", "Taşı, kopyala, sil, yeni albüm", "Telefondan yükle", "Ana ekrana eklenebilir uygulama"]),
         new("vault", "Gizli klasör", "Parolayla açılan, içeriği şifreli, ayrı bir klasör ağacı. Menüde dikkat çekmeyen bir adla görünür; yem parolası sahte bir içerik açar.",
             "Güvenlik", "1.0.0", false, ["AES-256 şifreleme", "Kurtarma anahtarı", "Yem parolası", "Yedek disklere şifreli kopya", "Çevrimdışı kurtarma aracı"]),
     ];

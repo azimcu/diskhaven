@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Archive, ChevronRight, Clock, HardDrive, Link2, Star, Trash2, Usb } from 'lucide-react'
+import { Archive, ChevronRight, Clock, HardDrive, Images, Link2, Star, Trash2, Usb } from 'lucide-react'
 import { usePlugins } from './plugins'
 import { formatSize } from './format'
 import type { Disk } from './types'
@@ -92,6 +92,9 @@ export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin
           ))}
         </details>
       )}
+      {plugins.has('gallery') && <a className="tree-row" style={{ paddingLeft: 30 }} href="/galeri.html">
+        <Images size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">Galeri</span>
+      </a>}
       {plugins.has('sharing') && <button className={`tree-row ${special === 'shares' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('shares')}>
         <Link2 size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.shares}</span>
       </button>}

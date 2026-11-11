@@ -18,6 +18,10 @@ RUN dotnet publish src/DiskHaven.Api/DiskHaven.Api.csproj -c Release -o /out --n
 RUN dotnet publish src/DiskHaven.Recover/DiskHaven.Recover.csproj -c Release -o /recover --no-restore -p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
+# gallery previews: vipsthumbnail for photos (HEIC via libde265), ffmpeg for a frame of each video
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libvips-tools libheif-plugin-libde265 ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=api /out ./
 COPY --from=api /recover ./recover

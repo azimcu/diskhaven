@@ -580,3 +580,4 @@ details.recent summary::-webkit-details-marker { display: none; }
 .versions li span { flex: 1; display: flex; flex-direction: column; font-size: 13px; }
 .versions li small { color: var(--muted); }
 .versions .btn.small { display: inline-flex; align-items: center; text-decoration: none; color: inherit; }
+a.tree-row { color: inherit; text-decoration: none; }

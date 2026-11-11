@@ -44,6 +44,10 @@ builder.Services.AddSingleton(new QuickAccess(configDir));
 builder.Services.AddSingleton(new DiskHaven.Core.Hideaway.HideawayStore(dataRoot));
 builder.Services.AddSingleton<HideawaySessions>();
 builder.Services.AddSingleton<SystemStats>();
+builder.Services.AddSingleton(new DiskHaven.Core.Gallery.MediaIndex(root, Path.Combine(configDir, "gallery", "index.json")));
+builder.Services.AddSingleton<GallerySettings>();
+builder.Services.AddSingleton(sp => new Thumbnails(configDir, sp.GetRequiredService<ILogger<Thumbnails>>()));
+builder.Services.AddHostedService<GalleryScanner>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SystemStats>());
 builder.Services.AddSingleton(new AccountStore(configDir));
 builder.Services.AddSingleton(new ShareStore(configDir));
@@ -649,6 +653,9 @@ app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, Upl
     catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: 400); }
     catch (DirectoryNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
 }).RequireAuthorization().LogsActivity("upload");
+
+app.MapGallery();
+app.MapGet("/galeri", () => Results.Redirect("/galeri.html"));
 
 // single-page app: unknown non-API paths serve index.html
 app.MapFallback(async ctx =>
