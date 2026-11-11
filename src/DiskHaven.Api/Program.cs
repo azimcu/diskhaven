@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.DataProtection;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using DiskHaven.Api;
@@ -68,6 +69,10 @@ builder.Services.Configure<HostOptions>(o => o.BackgroundServiceExceptionBehavio
 // Upload chunks are 16 MB; leave headroom.
 builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = 64L * 1024 * 1024);
 
+// sign-in cookies stay valid across restarts and updates (the keys used to live only in memory, so every restart
+// signed everyone out; a home-screen app would ask for the password after each update)
+builder.Services.AddDataProtection().SetApplicationName("DiskHaven")
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(configDir, "keys")));
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(o =>
     {

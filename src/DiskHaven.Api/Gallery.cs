@@ -66,6 +66,10 @@ public sealed class Thumbnails
         var video = MediaIndex.IsVideo(full);
         if (video ? !FfmpegAvailable : !VipsAvailable)
             return null;
+        // stored files come from anyone with an account (or a drop-box link): only hand real photo / video
+        // containers to the native decoders, never an SVG, PDF, playlist or script renamed to .jpg / .mp4
+        if (!LooksLikeMedia(full, video))
+            return null;
         await _gate.WaitAsync(ct);
         try
         {
@@ -85,6 +89,26 @@ public sealed class Thumbnails
         finally { _gate.Release(); }
     }
 
+    /// <summary>Checks the file's first bytes: JPEG, PNG, GIF, WebP, BMP, TIFF/DNG, HEIF/AVIF for photos;
+    /// MP4/MOV/3GP (ISO BMFF), Matroska/WebM, AVI for videos.</summary>
+    public static bool LooksLikeMedia(string full, bool video)
+    {
+        var h = new byte[16];
+        int n;
+        try { using var f = File.OpenRead(full); n = f.ReadAtLeast(h, 16, throwOnEndOfStream: false); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+        if (n < 12)
+            return false;
+        bool At(int i, ReadOnlySpan<byte> m) => h.AsSpan(i, m.Length).SequenceEqual(m);
+        var isoBmff = At(4, "ftyp"u8);
+        var riff = At(0, "RIFF"u8);
+        if (video)
+            return isoBmff || At(4, "moov"u8) || At(4, "mdat"u8) || At(4, "wide"u8) || At(4, "free"u8)
+                   || At(0, [0x1A, 0x45, 0xDF, 0xA3]) || (riff && At(8, "AVI "u8));
+        return At(0, [0xFF, 0xD8, 0xFF]) || At(0, [0x89, 0x50, 0x4E, 0x47]) || At(0, "GIF8"u8) || (riff && At(8, "WEBP"u8))
+               || At(0, "BM"u8) || At(0, [0x49, 0x49, 0x2A, 0x00]) || At(0, [0x4D, 0x4D, 0x00, 0x2A]) || isoBmff;
+    }
+
     private Task<bool> Photo(string full, string output, string variant, CancellationToken ct) =>
         variant == "s"
             ? Run("vipsthumbnail", [full, "--size", "360x360", "--smartcrop", "attention", "-o", output + "[Q=78,strip]"], ct)
@@ -96,7 +120,8 @@ public sealed class Thumbnails
             ? "scale=360:360:force_original_aspect_ratio=increase,crop=360:360"
             : "scale='min(1600,iw)':-2";
         foreach (var at in new[] { "1", "0" })
-            if (await Run("ffmpeg", ["-v", "error", "-y", "-ss", at, "-i", full, "-frames:v", "1", "-vf", scale, "-q:v", "4", output], ct)
+            if (await Run("ffmpeg", ["-v", "error", "-y", "-protocol_whitelist", "file",
+                    "-format_whitelist", "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi", "-ss", at, "-i", "file:" + full, "-frames:v", "1", "-vf", scale, "-q:v", "4", output], ct)
                 && File.Exists(output) && new FileInfo(output).Length > 0)
                 return true;
         return false;
@@ -107,6 +132,7 @@ public sealed class Thumbnails
         var psi = new ProcessStartInfo(tool) { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["VIPS_CONCURRENCY"] = "1";
+        psi.Environment["VIPS_BLOCK_UNTRUSTED"] = "1";   // no ImageMagick / SVG / PDF / matrix loaders
         using var p = Process.Start(psi);
         if (p is null)
             return false;
