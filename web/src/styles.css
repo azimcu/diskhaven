@@ -604,3 +604,4 @@ details.recent summary::-webkit-details-marker { display: none; }
   .transfer-bar { left: 8px; right: 8px; width: auto; max-width: none; bottom: 36px; }
 }
 .problem-mark { color: var(--danger); font-size: .85em; margin-left: .25em; }
+a.tree-row { color: inherit; text-decoration: none; }

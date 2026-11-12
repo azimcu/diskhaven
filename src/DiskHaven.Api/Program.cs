@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.DataProtection;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using DiskHaven.Api;
@@ -44,6 +45,10 @@ builder.Services.AddSingleton(new QuickAccess(configDir));
 builder.Services.AddSingleton(new DiskHaven.Core.Hideaway.HideawayStore(dataRoot));
 builder.Services.AddSingleton<HideawaySessions>();
 builder.Services.AddSingleton<SystemStats>();
+builder.Services.AddSingleton(new DiskHaven.Core.Gallery.MediaIndex(root, Path.Combine(configDir, "gallery", "index.json")));
+builder.Services.AddSingleton<GallerySettings>();
+builder.Services.AddSingleton(sp => new Thumbnails(configDir, sp.GetRequiredService<ILogger<Thumbnails>>()));
+builder.Services.AddHostedService<GalleryScanner>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SystemStats>());
 builder.Services.AddSingleton(new AccountStore(configDir));
 builder.Services.AddSingleton(new ShareStore(configDir));
@@ -69,6 +74,10 @@ builder.Services.Configure<HostOptions>(o => o.BackgroundServiceExceptionBehavio
 // Upload chunks are 16 MB; leave headroom.
 builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = 64L * 1024 * 1024);
 
+// sign-in cookies stay valid across restarts and updates (the keys used to live only in memory, so every restart
+// signed everyone out; a home-screen app would ask for the password after each update)
+builder.Services.AddDataProtection().SetApplicationName("DiskHaven")
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(configDir, "keys")));
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(o =>
     {
@@ -765,6 +774,9 @@ app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, Cla
     catch (VaultReadOnlyException e) { return Results.Problem(e.Message, statusCode: 409); }
     catch (IOException e) { return Results.Problem(e.Message, statusCode: 409); }   // e.g. no space on the disk; the upload stays and can be committed again
 }).RequireAuthorization().LogsActivity("upload");
+
+app.MapGallery();
+app.MapGet("/galeri", () => Results.Redirect("/galeri.html"));
 
 // single-page app: unknown non-API paths serve index.html
 app.MapFallback(async ctx =>
