@@ -12,23 +12,43 @@ public sealed class VaultRoot
     /// <summary>Internal folder name before the rename from HomeVault (2026-10); moved on start.</summary>
     public const string LegacyInternalFolderName = ".homevault";
 
-    /// <summary>True for the internal folder under its current or old name: both are hidden and reserved.</summary>
+    /// <summary>
+    /// True for DiskHaven's own names: the internal folder under its current or old name, and the files a backup
+    /// disk carries next to the user's folders (.diskhaven-disk.json, .diskhaven-trash, .diskhaven-tmp, .diskhaven-data).
+    /// All are hidden and reserved, so no client can list, change or delete them.
+    /// </summary>
     public static bool IsInternalName(string name) =>
         name.Equals(InternalFolderName, StringComparison.OrdinalIgnoreCase) ||
-        name.Equals(LegacyInternalFolderName, StringComparison.OrdinalIgnoreCase);
+        name.Equals(LegacyInternalFolderName, StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith(InternalFolderName + "-", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith(LegacyInternalFolderName + "-", StringComparison.OrdinalIgnoreCase);
 
     public string FullPath { get; }
 
-    public VaultRoot(string path)
+    /// <summary>
+    /// A read-only root refuses every change through <see cref="EnsureWritable"/> (checked by all writing classes).
+    /// For disks this sits on top of the kernel's read-only mount, so a mistake in one layer is caught by the other.
+    /// </summary>
+    public bool ReadOnly { get; }
+
+    public VaultRoot(string path, bool readOnly = false)
     {
+        ReadOnly = readOnly;
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Vault root path is empty.", nameof(path));
         FullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
         if (!Directory.Exists(FullPath))
             throw new DirectoryNotFoundException($"Vault root does not exist: {FullPath}");
         var legacy = Path.Combine(FullPath, LegacyInternalFolderName);
-        if (Directory.Exists(legacy) && !Directory.Exists(Path.Combine(FullPath, InternalFolderName)))
+        if (!readOnly && Directory.Exists(legacy) && !Directory.Exists(Path.Combine(FullPath, InternalFolderName)))
             Directory.Move(legacy, Path.Combine(FullPath, InternalFolderName));
+    }
+
+    /// <summary>Throws when this root must not be changed.</summary>
+    public void EnsureWritable()
+    {
+        if (ReadOnly)
+            throw new VaultReadOnlyException();
     }
 
     /// <summary>

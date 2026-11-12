@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Archive, ChevronRight, Clock, HardDrive, Link2, Star, Trash2, Usb } from 'lucide-react'
+import { Archive, ChevronRight, Clock, HardDrive, Link2, Lock, ShieldCheck, Star, Trash2, Usb } from 'lucide-react'
 import { usePlugins } from './plugins'
 import { formatSize } from './format'
-import type { Disk } from './types'
+import type { DriveInfo } from './types'
 import { api, folderEntries } from './api'
 import { FileIcon } from './FileIcon'
 import { t } from './strings'
@@ -16,26 +16,22 @@ interface Props {
   isAdmin: boolean
   onDropItems: (dest: string, e: React.DragEvent) => void
   storage: { total: number; free: number } | null
+  /** the disk that is open (null = main storage or a special page) */
+  currentDrive: string | null
+  drives: DriveInfo[]
+  onOpenDrive: (d: DriveInfo) => void
 }
 
 /** Left navigation pane: folder tree of the NAS (loaded lazily) and the recycle bin. */
-export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin, onDropItems, storage }: Props) {
-  // drives, like "This PC": the NAS storage and (for admins) the other disks with their fill level
+export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin, onDropItems, storage, currentDrive, drives, onOpenDrive }: Props) {
+  // drives, like "This PC": the NAS storage and (for admins) every disk with its fill level
   const plugins = usePlugins()
-  const [disks, setDisks] = useState<Disk[]>([])
+  const disks = drives.filter(d => d.kind !== 'main')
   const [quick, setQuick] = useState<{ favorites: string[]; recent: string[] }>({ favorites: [], recent: [] })
   useEffect(() => {
     if (!plugins.has('quick')) return
     api.quick().then(setQuick).catch(() => {})
   }, [version, current, plugins.has('quick')])
-  useEffect(() => {
-    if (!isAdmin || !plugins.has('disks')) return
-    let alive = true
-    const load = () => api.disks().then(r => alive && setDisks(r.disks)).catch(() => {})
-    load()
-    const timer = window.setInterval(load, 30000)
-    return () => { alive = false; window.clearInterval(timer) }
-  }, [isAdmin, version, plugins.has('disks')])
   // expand the path to the current folder automatically
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']))
   useEffect(() => {
@@ -73,13 +69,23 @@ export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin
       <div className="drives" aria-label="Sürücüler">
         <div className="drives-title">Sürücüler</div>
         {storage && <Drive name={t.thisNas} icon={<HardDrive size={18} strokeWidth={1.5} />} total={storage.total} free={storage.free}
-          onClick={() => onOpen('')} />}
-        {disks.map(d => (
-          <Drive key={d.id} name={d.name || d.label || d.model} icon={<Usb size={18} strokeWidth={1.5} />}
-            total={d.usage?.total ?? d.size} free={d.usage?.free ?? null} off={d.state !== 'mounted'}
-            note={d.state === 'mounted' ? undefined : d.state === 'off' ? 'kapalı' : 'bağlı değil'}
-            active={special === 'disks'} onClick={() => onOpenSpecial('disks')} />
+          active={current != null && !currentDrive} onClick={() => onOpen('')} />}
+        {disks.filter(d => !d.system).map(d => (
+          <Drive key={d.id} name={d.name} icon={d.kind === 'usb' ? <Usb size={18} strokeWidth={1.5} /> : <HardDrive size={18} strokeWidth={1.5} />}
+            badge={d.readOnly ? <Lock size={11} aria-label="salt okunur" /> : null}
+            total={d.total} free={d.state === 'mounted' ? d.free : null} off={d.state !== 'mounted'}
+            note={d.state === 'mounted' ? undefined : d.state === 'off' ? 'kapalı · açmak için tıkla' : 'açmak için tıkla'}
+            active={currentDrive === d.id} onClick={() => onOpenDrive(d)} />
         ))}
+        {disks.some(d => d.system) && (
+          <details className="system-disks">
+            <summary className="drives-title">Sistem diskleri ({disks.filter(d => d.system).length})</summary>
+            {disks.filter(d => d.system).map(d => (
+              <Drive key={d.id} name={d.systemMount || d.name || d.fsType || 'sistem'} icon={<ShieldCheck size={18} strokeWidth={1.5} />}
+                total={d.total} free={null} off note="sunucu kullanıyor · dokunulmaz" onClick={() => onOpenDrive(d)} />
+            ))}
+          </details>
+        )}
       </div>
       <div className="tree-sep" />
       {plugins.has('quick') && quick.recent.length > 0 && (
@@ -164,14 +170,14 @@ function TreeNode(props: NodeProps) {
   )
 }
 
-function Drive({ name, icon, total, free, active, off, note, onClick }: {
-  name: string; icon: React.ReactNode; total: number; free: number | null; active?: boolean; off?: boolean; note?: string; onClick: () => void
+function Drive({ name, icon, badge, total, free, active, off, note, onClick }: {
+  name: string; icon: React.ReactNode; badge?: React.ReactNode; total: number; free: number | null; active?: boolean; off?: boolean; note?: string; onClick: () => void
 }) {
   const used = free == null || !total ? null : (total - free) / total
   return (
     <button className={`drive ${active ? 'active' : ''} ${off ? 'off' : ''}`} onClick={onClick} title={name}>
       <span className="ic">{icon}</span>
-      <b>{name}</b>
+      <b>{name}{badge && <span className="drive-badge">{badge}</span>}</b>
       {used != null && <span className={`bar ${used > 0.9 ? 'full' : ''}`}><i style={{ width: `${Math.round(used * 100)}%` }} /></span>}
       <small>{used != null ? `${formatSize(free)} boş / ${formatSize(total)}` : note ?? formatSize(total)}</small>
     </button>

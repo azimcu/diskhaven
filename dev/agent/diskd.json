@@ -1,9 +1,11 @@
 {
-  "mountRoot": "/srv/diskhaven-dev/disks",
-  "socket": "/run/diskhaven-dev/diskd.sock",
-  "stateFile": "/var/lib/diskhaven-dev/diskd-known.json",
+  "mountRoot": "/srv/diskhaven-test/disks",
+  "socket": "/run/diskhaven-test/diskd.sock",
+  "stateFile": "/var/lib/diskhaven-test/diskd-known.json",
   "uid": 1000,
   "gid": 1000,
   "usb": false,
-  "virtualDir": "/mnt/immich/diskhaven-dev/disks"
+  "sata": false,
+  "protected": [],
+  "virtualDir": "/srv/diskhaven-test/images"
 }

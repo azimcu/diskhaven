@@ -1,9 +1,9 @@
 [Unit]
-Description=DiskHaven DEV (virtual disks only) disk agent (mount, spin-down and power control for DiskHaven disks)
+Description=DiskHaven TEST disk agent (virtual disks only; usb and sata off)
 After=local-fs.target
 
 [Service]
-ExecStart=/usr/bin/python3 /usr/local/lib/diskhaven-dev/diskhaven-diskd.py /etc/diskhaven-dev/diskd.json
+ExecStart=/usr/bin/python3 /usr/local/lib/diskhaven-test/diskhaven-diskd.py /etc/diskhaven-test/diskd.json
 Restart=on-failure
 NoNewPrivileges=true
 # no mount namespacing (ProtectSystem, PrivateTmp...): mounts must be visible to the host and the container

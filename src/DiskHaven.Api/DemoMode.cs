@@ -22,7 +22,9 @@ public sealed record DemoOptions(bool Enabled, string UserName, string Password,
             return false;
         var p = r.Path;
         return p.StartsWithSegments("/api/auth/password") || p.StartsWithSegments("/api/users") ||
-               p.StartsWithSegments("/api/shares") || p.StartsWithSegments("/api/disks") || p.StartsWithSegments("/api/sync");
+               p.StartsWithSegments("/api/shares") || p.StartsWithSegments("/api/disks") || p.StartsWithSegments("/api/sync") ||
+               p.StartsWithSegments("/api/backups") ||
+               p.StartsWithSegments("/api/drives") || p.StartsWithSegments("/api/transfers");
     }
 
     public static long FolderBytes(string path) =>

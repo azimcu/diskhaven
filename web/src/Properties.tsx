@@ -20,18 +20,18 @@ function PropertiesDialog({ entry, onClose }: { entry: FileEntry; onClose: () =>
   const [sha, setSha] = useState<string | null>(null)
   const [hashing, setHashing] = useState(false)
   const { has } = usePlugins()
-  useEffect(() => { api.properties(entry.path).then(r => { setP(r); setHidden(r.entry.hidden) }).catch(toastError) }, [entry.path])
+  useEffect(() => { api.properties(entry.path, entry.drive).then(r => { setP(r); setHidden(r.entry.hidden) }).catch(toastError) }, [entry.path, entry.drive])
 
   const e = p?.entry ?? entry
   const folder = e.kind === 'Folder'
   const dotName = e.name.startsWith('.')
   const toggleHidden = async (v: boolean) => {
     setHidden(v)   // the checkbox answers at once; the server follows
-    try { await api.setHidden([e.path], v) } catch (err) { setHidden(!v); toastError(err) }
+    try { await api.setHidden([e.path], v, entry.drive) } catch (err) { setHidden(!v); toastError(err) }
   }
   const hash = async () => {
     setHashing(true)
-    try { setSha((await api.checksum(e.path)).sha256) } catch (err) { toastError(err) }
+    try { setSha((await api.checksum(e.path, entry.drive)).sha256) } catch (err) { toastError(err) }
     setHashing(false)
   }
 
@@ -65,7 +65,7 @@ function PropertiesDialog({ entry, onClose }: { entry: FileEntry; onClose: () =>
               : <button className="btn small" disabled={hashing} onClick={hash}>{hashing ? 'Hesaplanıyor…' : 'Hesapla'}</button>}</dd>
           </>}
         </dl>
-        {!folder && has('versions') && <Versions path={e.path} onRestored={onClose} />}
+        {!folder && has('versions') && !entry.drive && <Versions path={e.path} onRestored={onClose} />}
         <div className="modal-actions"><button className="btn primary" autoFocus onClick={onClose}>Tamam</button></div>
       </div>
     </Modal>

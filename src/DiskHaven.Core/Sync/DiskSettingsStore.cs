@@ -12,7 +12,12 @@ public sealed record SyncSchedule(bool Enabled, string Time, DateOnly? LastRun)
 public sealed record SyncSummary(DateTimeOffset Finished, bool Success, bool Canceled, int Copied, int Updated, int Deleted,
     int Verified, int Errors, long BytesCopied, string? Message);
 
-/// <summary>Settings of a backup disk DiskHaven has adopted. <see cref="FsId"/> is the filesystem UUID.</summary>
+/// <summary>
+/// Settings of a disk DiskHaven knows. <see cref="FsId"/> is the filesystem UUID. Every new disk is registered with
+/// <see cref="ReadOnly"/> set: it is mounted read-only by the kernel and DiskHaven refuses all changes on it until the
+/// owner switches it to writable. <see cref="DiskId"/> is empty until the disk was writable once and got its marker file.
+/// Settings saved before read-only existed have no such field and keep working as writable backup disks.
+/// </summary>
 public sealed record DiskSettings(
     string FsId,
     string DiskId,
@@ -20,7 +25,8 @@ public sealed record DiskSettings(
     IReadOnlyList<string> Folders,
     SyncSchedule Schedule,
     AfterSync After,
-    SyncSummary? LastSync);
+    SyncSummary? LastSync,
+    bool ReadOnly = false);
 
 /// <summary>Adopted disks in config/disks.json, plus a history of sync reports per disk.</summary>
 public sealed class DiskSettingsStore(string configDir)

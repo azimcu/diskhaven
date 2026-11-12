@@ -22,6 +22,9 @@ public sealed class DiskHavenFactory : WebApplicationFactory<Program>, IAsyncLif
 
     public string DataRoot => Path.Combine(_root, "data");
     public string ConfigDir => Path.Combine(_root, "config");
+    /// <summary>Stands in for the agent's mount folder; a test "mounts" a disk by listing it in <see cref="MountInfo"/>.</summary>
+    public string DisksDir => Path.Combine(_root, "disks");
+    public string MountInfo => Path.Combine(_root, "mountinfo");
     private string SetupTokenPath => Path.Combine(ConfigDir, "setup-token.txt");
 
     public const string UserName = "azim";
@@ -35,8 +38,12 @@ public sealed class DiskHavenFactory : WebApplicationFactory<Program>, IAsyncLif
         // Program reads these while the host is built, before WebApplicationFactory's own configuration callbacks.
         Environment.SetEnvironmentVariable("DiskHaven__DataRoot", DataRoot);
         Environment.SetEnvironmentVariable("DiskHaven__ConfigDir", ConfigDir);
+        Environment.SetEnvironmentVariable("DiskHaven__DisksPath", DisksDir);
+        Environment.SetEnvironmentVariable("DiskHaven__MountInfo", MountInfo);
         Directory.CreateDirectory(DataRoot);
         Directory.CreateDirectory(ConfigDir);
+        Directory.CreateDirectory(DisksDir);
+        File.WriteAllText(MountInfo, "");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -46,10 +53,12 @@ public sealed class DiskHavenFactory : WebApplicationFactory<Program>, IAsyncLif
         {
             ["DiskHaven:DataRoot"] = DataRoot,
             ["DiskHaven:ConfigDir"] = ConfigDir,
+            ["DiskHaven:DisksPath"] = DisksDir,
+            ["DiskHaven:MountInfo"] = MountInfo,
         }));
         builder.ConfigureTestServices(services =>
         {
-            // SystemStats, Housekeeping, FolderSizeScanner and SyncScheduler poll the real machine; a test must not.
+            // SystemStats, Housekeeping, FolderSizeScanner and BackupScheduler poll the real machine; a test must not.
             foreach (var service in services.Where(d => d.ServiceType == typeof(IHostedService)).ToArray())
                 services.Remove(service);
         });
@@ -76,7 +85,7 @@ public sealed class DiskHavenFactory : WebApplicationFactory<Program>, IAsyncLif
     }
 }
 
-public sealed class ApiEndpointsTests : IClassFixture<DiskHavenFactory>
+public sealed partial class ApiEndpointsTests : IClassFixture<DiskHavenFactory>
 {
     private readonly DiskHavenFactory _factory;
     private readonly HttpClient _admin;

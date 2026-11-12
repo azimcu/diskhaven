@@ -23,6 +23,7 @@ public sealed class UploadCommitter(VaultRoot root, IVaultChangeListener? listen
         string expectedSha256, DateTimeOffset? lastModified, CancellationToken ct = default,
         Action<string>? replaceExisting = null)
     {
+        root.EnsureWritable();
         var parts = VaultRoot.Normalize(relativeName).Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0)
             throw new VaultPathException("File name is empty.");
@@ -49,25 +50,50 @@ public sealed class UploadCommitter(VaultRoot root, IVaultChangeListener? listen
             root.Resolve(root.ToRelative(folder)); // re-check: no symlink on the way
         }
 
-        // make sure the bytes are on the disk before the file becomes visible
-        using (var handle = File.OpenHandle(receivedFile, FileMode.Open, FileAccess.ReadWrite))
-            RandomAccess.FlushToDisk(handle);
-        if (lastModified is { } mtime)
-            File.SetLastWriteTimeUtc(receivedFile, mtime.UtcDateTime);
-        string target;
-        var taken = replaceExisting is null ? null
-            : Directory.EnumerateFiles(folder).FirstOrDefault(f => Path.GetFileName(f).Equals(parts[^1], StringComparison.OrdinalIgnoreCase));
-        if (taken is not null)
+        // an upload for another drive was received on the main disk: copy it onto that drive first and
+        // verify the copy against the client's checksum, so the final step is still a single rename
+        string? staged = null;
+        if (!receivedFile.StartsWith(root.FullPath + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
-            listener?.Removing(taken);
-            replaceExisting!(root.ToRelative(taken));
-            target = Path.Combine(folder, parts[^1]);
+            var need = new FileInfo(receivedFile).Length;
+            if (need > new DriveInfo(root.FullPath).AvailableFreeSpace - (64L << 20))
+                throw new IOException("Not enough free space on the disk.");
+            var (temp, hash) = await VerifiedCopy.ToTempAsync(receivedFile,
+                Path.Combine(root.FullPath, VaultRoot.InternalFolderName, "tmp"), null, ct);
+            if (!hash.Equals(actual, StringComparison.OrdinalIgnoreCase))
+            {
+                VerifiedCopy.TryDelete(temp);
+                throw new IOException("The file changed while it was being copied.");
+            }
+            staged = receivedFile = temp;
         }
-        else
-            target = Path.Combine(folder, FileNames.Unique(folder, parts[^1]));
-        File.Move(receivedFile, target);   // throws if the name was taken meanwhile: nothing is overwritten
-        listener?.Added(createdTop ?? target);
-        return new Result(root.ToRelative(target), actual, new FileInfo(target).Length);
+        try
+        {
+            // make sure the bytes are on the disk before the file becomes visible
+            using (var handle = File.OpenHandle(receivedFile, FileMode.Open, FileAccess.ReadWrite))
+                RandomAccess.FlushToDisk(handle);
+            if (lastModified is { } mtime)
+                File.SetLastWriteTimeUtc(receivedFile, mtime.UtcDateTime);
+            string target;
+            var taken = replaceExisting is null ? null
+                : Directory.EnumerateFiles(folder).FirstOrDefault(f => Path.GetFileName(f).Equals(parts[^1], StringComparison.OrdinalIgnoreCase));
+            if (taken is not null)
+            {
+                listener?.Removing(taken);
+                replaceExisting!(root.ToRelative(taken));
+                target = Path.Combine(folder, parts[^1]);
+            }
+            else
+                target = Path.Combine(folder, FileNames.Unique(folder, parts[^1]));
+            File.Move(receivedFile, target);   // throws if the name was taken meanwhile: nothing is overwritten
+            listener?.Added(createdTop ?? target);
+            return new Result(root.ToRelative(target), actual, new FileInfo(target).Length);
+        }
+        finally
+        {
+            if (staged is not null)
+                VerifiedCopy.TryDelete(staged);   // only left behind when the commit failed
+        }
     }
 
     public static async Task<string> HashAsync(string file, CancellationToken ct = default)

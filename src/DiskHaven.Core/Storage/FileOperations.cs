@@ -21,6 +21,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
 
     public string CreateFolder(string? parent, string name)
     {
+        Root.EnsureWritable();
         var dir = ExistingFolder(parent);
         name = FileNames.Validate(name);
         if (FileNames.Exists(dir, name))
@@ -32,6 +33,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
 
     public string Rename(string path, string newName)
     {
+        Root.EnsureWritable();
         var full = ExistingEntry(path);
         newName = FileNames.Validate(newName);
         var parent = Path.GetDirectoryName(full)!;
@@ -49,6 +51,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
     /// <summary>Moves entries into a folder. Name clashes are resolved by keeping both ("name (2)").</summary>
     public IReadOnlyList<string> Move(IEnumerable<string> paths, string? destination)
     {
+        Root.EnsureWritable();
         var dest = ExistingFolder(destination);
         var result = new List<string>();
         foreach (var path in paths)
@@ -73,6 +76,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
     /// <summary>Copies entries into a folder. Copying into the same folder creates "name - Kopya".</summary>
     public IReadOnlyList<string> Copy(IEnumerable<string> paths, string? destination)
     {
+        Root.EnsureWritable();
         var dest = ExistingFolder(destination);
         var result = new List<string>();
         foreach (var path in paths)
@@ -98,6 +102,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
     /// <summary>Moves entries to the recycle bin.</summary>
     public IReadOnlyList<TrashItem> Delete(IEnumerable<string> paths)
     {
+        Root.EnsureWritable();
         var items = new List<TrashItem>();
         foreach (var path in paths)
         {
@@ -133,6 +138,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
     /// <summary>Puts an item back where it was. Missing parent folders are recreated; clashes keep both.</summary>
     public string Restore(string id)
     {
+        Root.EnsureWritable();
         var (slot, item) = TrashSlot(id);
         var originalParent = Root.Resolve(Path.GetDirectoryName(item.OriginalPath)?.Replace('\\', '/'));
         // remember the highest folder that has to be recreated, so folder sizes count it
@@ -151,6 +157,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
     /// <summary>Permanently removes one item from the recycle bin.</summary>
     public void Purge(string id)
     {
+        Root.EnsureWritable();
         var (slot, _) = TrashSlot(id);
         Directory.Delete(slot, recursive: true);
         versions?.Forget(VersionStore.TrashKey(id));
@@ -159,6 +166,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
     /// <summary>Permanently removes recycle bin items older than <paramref name="age"/>. Returns how many.</summary>
     public int PurgeOlderThan(TimeSpan age)
     {
+        Root.EnsureWritable();
         var cutoff = clock.GetUtcNow() - age;
         var old = ListTrash().Where(i => i.DeletedAt < cutoff).ToList();
         foreach (var item in old)
@@ -214,6 +222,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
 
     private void CopyFile(string source, string target)
     {
+        SpecialFiles.EnsureNotSpecial(source);
         Directory.CreateDirectory(TempDir);
         var temp = Path.Combine(TempDir, Guid.NewGuid().ToString("N"));
         try
@@ -241,7 +250,7 @@ public sealed class FileOperations(VaultRoot root, TimeProvider clock, IVaultCha
             if (new DirectoryInfo(dir).LinkTarget is null)
                 CopyDirectory(dir, Path.Combine(target, Path.GetFileName(dir)));
         foreach (var file in Directory.EnumerateFiles(source))
-            if (new FileInfo(file).LinkTarget is null)
+            if (new FileInfo(file).LinkTarget is null && !SpecialFiles.IsSpecial(file))
                 CopyFile(file, Path.Combine(target, Path.GetFileName(file)));
         Directory.SetLastWriteTimeUtc(target, Directory.GetLastWriteTimeUtc(source));
     }

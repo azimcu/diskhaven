@@ -95,6 +95,7 @@ public sealed class FileBrowser(VaultRoot root, FolderSizeIndex? sizes = null)
         var full = Root.Resolve(relativePath);
         if (!File.Exists(full))
             throw new FileNotFoundException("File not found.");
+        SpecialFiles.EnsureNotSpecial(full);
         return full;
     }
 
@@ -117,9 +118,26 @@ public sealed class FileBrowser(VaultRoot root, FolderSizeIndex? sizes = null)
         return new ItemProperties(entry, created, info.LastAccessTimeUtc, readOnly, onDisk, driveFree);
     }
 
+    /// <summary>Folders a filesystem or Windows keeps at a disk's root; shown as hidden items, like Explorer does.</summary>
+    private static readonly HashSet<string> SystemFolders = new(StringComparer.OrdinalIgnoreCase)
+        { "lost+found", "System Volume Information", "$RECYCLE.BIN", "RECYCLER", ".Trash-1000", ".Trashes", ".Spotlight-V100", ".fseventsd" };
+
     private FileEntry ToEntry(FileSystemInfo info)
     {
+        try { return Describe(info); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // listed anyway, so nothing in the folder is hidden from its owner; it just cannot be opened from here
+            var badName = info.Name.Contains('\uFFFD');
+            return new FileEntry(info.Name, Root.ToRelative(info.FullName), info is DirectoryInfo ? EntryKind.Folder : EntryKind.File,
+                null, DateTimeOffset.UnixEpoch, null, false, Problem: badName ? EntryProblem.BadName : null);
+        }
+    }
+
+    private FileEntry Describe(FileSystemInfo info)
+    {
         var isDir = info is DirectoryInfo;
+        var systemFolder = isDir && SystemFolders.Contains(info.Name) && Path.GetDirectoryName(info.FullName) == Root.FullPath;
         var rel = Root.ToRelative(info.FullName);
         var stats = isDir ? sizes?.Get(rel) : null;
         return new FileEntry(
@@ -129,9 +147,10 @@ public sealed class FileBrowser(VaultRoot root, FolderSizeIndex? sizes = null)
             isDir ? stats?.Size : ((FileInfo)info).Length,
             info.LastWriteTimeUtc,
             isDir ? null : NullIfEmpty(info.Extension.TrimStart('.').ToLowerInvariant()),
-            HiddenFlag.IsHidden(info),
+            systemFolder || HiddenFlag.IsHidden(info),
             stats?.Files,
-            stats?.Folders);
+            stats?.Folders,
+            !isDir && SpecialFiles.IsSpecial(info.FullName) ? EntryProblem.Special : null);
     }
 
     private static string? NullIfEmpty(string s) => s.Length == 0 ? null : s;

@@ -20,6 +20,18 @@ const serverMessages: Record<string, string> = {
   'Upload is not complete.': 'Yükleme tamamlanmadı.',
   network: 'Sunucuya ulaşılamıyor. Bağlantını kontrol et.',
   'Disk is not adopted.': 'Bu disk henüz DiskHaven yedek diski yapılmamış.',
+  'This drive is read-only.': 'Bu disk salt okunur. DiskHaven bu diske hiçbir şey yazmaz; ayarı Diskler sayfasından değiştirebilirsin.',
+  'The disk is not mounted. Open it from the drive list first.': 'Disk şu an bağlı değil. Kenar çubuğundaki Sürücüler listesinden aç.',
+  'Only admins can open disks.': 'Diskleri sadece yöneticiler açabilir.',
+  'DiskHaven has no permission for this item on the disk.': 'DiskHaven\'in diskteki bu öğe için izni yok (öğe başka bir kullanıcıya ait olabilir).',
+  'Disk not found.': 'Disk bulunamadı.',
+  'Disk is not registered.': 'Disk kayıtlı değil.',
+  'A transfer is already running.': 'Zaten bir kopyalama/taşıma sürüyor. Bitmesini bekle.',
+  'The disk is in use by a running job.': 'Disk şu an bir kopyalama ya da eşitleme işinde kullanılıyor.',
+  'Nothing to transfer.': 'Aktarılacak öğe yok.',
+  'Only the person who started the transfer or an admin can stop it.': 'Bu aktarımı sadece başlatan kişi ya da bir yönetici durdurabilir.',
+  'Destination folder not found.': 'Hedef klasör bulunamadı.',
+  'Symbolic links are not served.': 'Sembolik bağlantılar açılmaz.',
   'No folders are assigned to this disk.': 'Bu diske henüz klasör atanmamış.',
   'A sync is already running.': 'Şu an başka bir eşitleme sürüyor.',
   'Invalid time.': 'Saat geçersiz.',
@@ -52,6 +64,26 @@ export function translateServerMessage(message: string, status?: number): string
   if (message.endsWith(' already exists.')) return `${message.slice(0, -' already exists.'.length)} zaten var.`
   if (message.startsWith('Folder not found: ')) return `Klasör bulunamadı: ${message.slice(18)}`
   if (message.startsWith('User name:')) return 'Kullanıcı adı 2-32 karakter olmalı; harf, rakam, . _ - kullanılabilir.'
+  if (message.startsWith('Not enough free space on the disk. Needed ')) {
+    const m = message.match(/Needed (\d+) bytes, free (\d+) bytes/)
+    const gb = (n: string) => (Number(n) / 1073741824).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) + ' GB'
+    return m ? `Hedef diskte yer yetmiyor: ${gb(m[1])} gerekiyor, ${gb(m[2])} boş. Hiçbir şey kopyalanmadı.` : 'Hedef diskte yer yetmiyor.'
+  }
+  if (message.startsWith('The copy could not be verified')) return 'Kopya doğrulanamadı (disk hatası olabilir); dosya yerine konmadı: ' + message.slice(message.indexOf(':') + 2)
+  if (message.startsWith('The file changed while it was being copied')) return 'Dosya kopyalanırken değişti; kopya yerine konmadı.'
+  if (message.startsWith('The destination disk is full')) return 'Hedef disk doldu; aktarım durduruldu. Yarım dosya bırakılmadı.'
+  if (message.startsWith('The disk was disconnected')) return 'Disk çıkarıldı ya da ayrıldı; aktarım durduruldu. Tamamlanmayan öğelerin aslı yerinde.'
+  if (message.startsWith('This is a special file')) return 'Bu bir özel dosya (boru, soket ya da aygıt); içinde veri yok, atlandı.'
+  if (message.startsWith('The name of this item is not valid UTF-8')) return 'Bu öğenin adı okunamıyor (eski bir Windows/Linux sisteminden kalma karakterler); kopyalanmadı. Önce kendi bilgisayarında adını değiştir.'
+  if (message.startsWith('Copied, but the original was kept')) return 'Kopyalandı ama asıl yerinde bırakıldı: içinde kopyalanamayan kısayol ya da özel dosya var.'
+  if (message.startsWith('The original was kept because it changed')) return 'Asıl dosya kopyalanırken değişti; yeni hâli kaybolmasın diye silinmedi. İşi tekrar çalıştırınca güncel hâli kopyalanır.'
+  if (message.startsWith('Copied, but the original could not be moved')) return 'Kopyalandı ama asıl çöp kutusuna taşınamadı; yerinde duruyor.'
+  if (message.startsWith('The folder could not be read')) return 'Klasör okunamadı (izin yok); içindekiler kopyalanmadı.'
+  if (message.startsWith('The folder could not be created on the destination')) return 'Klasör hedef diskte oluşturulamadı (bu disk bu adı kabul etmiyor olabilir); içindekiler kopyalanmadı.'
+  if (message.startsWith('The file is larger than this disk\'s file system allows')) return 'Dosya bu disk için çok büyük: FAT32 biçimli bir diskte tek dosya en fazla 4 GB olabilir. Dosya kopyalanmadı, hiçbir şey silinmedi.'
+  if (/File too large|too large/i.test(message)) return 'Dosya bu disk için çok büyük (FAT32 en fazla 4 GB\'lık dosya alır).'
+  if (/Invalid argument/.test(message)) return 'Bu disk dosyanın adını kabul etmiyor (Windows biçimli disklerde : ? * " < > | \\ kullanılamaz).'
+  if (/Permission denied|Access to the path .* is denied/.test(message)) return 'Bu öğeyi okuma izni yok.'
   if (status === 429) return 'Çok fazla deneme yapıldı. Bir dakika bekleyip tekrar dene.'
   if (status === 422) return 'Dosya doğrulanamadı (bozuk aktarım). Tekrar yükleniyor.'
   return message
@@ -76,6 +108,11 @@ export const t = {
   extracting: 'Ayıklanıyor…',
   hiddenDone: (n: number, hidden: boolean) => `${n} öğe ${hidden ? 'gizlendi' : 'görünür yapıldı'}`,
   thisNas: 'Bu NAS',
+  disk: 'Disk',
+  readOnlyDrive: 'Bu disk salt okunur. DiskHaven bu diske hiçbir şey yazmaz.',
+  readOnlyStrip: 'Salt okunur disk: gezebilir, açabilir, indirebilir ve başka diske kopyalayabilirsin. Değişiklik yapılamaz.',
+  changeOnDisks: 'Diskler sayfasında değiştir',
+  diskTrash: (name: string) => `${name} · çöp kutusu`,
   trash: 'Çöp Kutusu',
   disks: 'Diskler',
   newFolder: 'Yeni klasör',

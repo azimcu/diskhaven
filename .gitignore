@@ -12,3 +12,4 @@ dist/
 appsettings.*.local.json
 web/node_modules/
 deploy/.env
+__pycache__/

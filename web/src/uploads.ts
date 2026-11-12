@@ -12,6 +12,8 @@ export interface UploadItem {
   batch: number
   file: File
   destination: string
+  /** "" = main storage, otherwise the disk id; fixed when the file is queued */
+  drive: string
   relativeName: string
   status: UploadStatus
   /** 0..1 within the current stage */
@@ -59,7 +61,7 @@ export const uploads = {
   getSnapshot: () => snapshot,
 
   /** Files with their path relative to the drop target ("Folder/sub/file.jpg" for folder uploads). */
-  add(destination: string, files: { file: File; relativeName: string; replace?: boolean }[]) {
+  add(destination: string, files: { file: File; relativeName: string; replace?: boolean }[], drive = '') {
     if (files.length === 0) return
     const batch: Batch = {
       id: nextId++,
@@ -71,7 +73,7 @@ export const uploads = {
     items = [
       ...items,
       ...files.map(f => ({
-        id: nextId++, batch: batch.id, file: f.file, destination, relativeName: f.relativeName,
+        id: nextId++, batch: batch.id, file: f.file, destination, drive, relativeName: f.relativeName,
         status: 'queued' as const, progress: 0, attempts: 0, replace: f.replace,
       })),
     ]
@@ -137,9 +139,9 @@ async function run(id: number) {
     // "hideaway:<folder id>" uploads go into the hidden folder, encrypted on commit
     const result = item.destination.startsWith('hideaway:')
       ? await api.hideaway.commit(uploadId, item.destination.slice(9), item.relativeName, sha256, item.file.lastModified)
-      : await api.commitUpload(uploadId, item.destination, item.relativeName, sha256, item.file.lastModified, item.replace)
+      : await api.commitUpload(uploadId, item.destination, item.relativeName, sha256, item.file.lastModified, item.replace, item.drive || undefined)
     update(id, { status: 'done', progress: 1, resultPath: result.path })
-    uploadEvents.dispatchEvent(new CustomEvent('committed', { detail: item.destination }))
+    uploadEvents.dispatchEvent(new CustomEvent('committed', { detail: { drive: item.drive, path: item.destination } }))
   } catch (e) {
     if (canceled(id)) return
     const latest = current(id)!
@@ -178,7 +180,7 @@ function tusUpload(item: UploadItem, onProgress: (p: number) => void): Promise<s
       metadata: item.destination.startsWith('hideaway:') ? { filename: 'file', destination: 'x' } : { filename: item.relativeName, destination: item.destination },
       // same file into the same place -> continue the earlier, interrupted upload
       fingerprint: async () =>
-        ['diskhaven', item.destination, item.relativeName, item.file.size, item.file.lastModified].join('|'),
+        ['diskhaven', item.drive, item.destination, item.relativeName, item.file.size, item.file.lastModified].join('|'),
       storeFingerprintForResuming: true,
       removeFingerprintOnSuccess: true,
       onProgress: (sent, total) => onProgress(total ? sent / total : 1),

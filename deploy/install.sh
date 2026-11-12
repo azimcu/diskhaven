@@ -55,6 +55,8 @@ if [ ! -f /etc/diskhaven/diskd.json ]; then
   "uid": $DH_UID,
   "gid": $DH_GID,
   "usb": true,
+  "sata": true,
+  "protected": [],
   "virtualDir": null
 }
 JSON

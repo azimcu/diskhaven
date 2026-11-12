@@ -1,31 +1,35 @@
-# Development instance on homenas. Fully isolated: own project name, own network, only the
-# dummy-data folder is mounted. Remove everything with:  dev/remove-dev.sh
-name: diskhaven-dev
+# Test instance on homenas, fully separate from the real one: own project name, own port (8090), its data
+# and virtual disks on the system SSD under /srv/diskhaven-test, and its own disk agent that can only touch
+# loop devices backed by images in /srv/diskhaven-test/images (usb=false, sata=false). Set up: dev/setup-test.sh
+# Remove everything: dev/remove-dev.sh
+name: diskhaven-test
 services:
   diskhaven:
     build: ..
-    image: diskhaven:dev
-    container_name: diskhaven-dev
+    image: diskhaven:test
+    container_name: diskhaven-test
     user: "1000:1000"
     restart: unless-stopped
     ports:
-      - "8095:8080"
+      - "8090:8080"
     environment:
       TZ: Europe/Istanbul
       DiskHaven__AgentSocket: /run/diskhaven/diskd.sock
       DiskHaven__DisksPath: /disks
     volumes:
-      - /mnt/immich/diskhaven-dev/data:/data
-      - /mnt/immich/diskhaven-dev/config:/config
-      # disk agent socket (dev agent: virtual disks only) and the folder it mounts disks under
-      - /run/diskhaven-dev:/run/diskhaven
+      - /srv/diskhaven-test/data:/data
+      - /srv/diskhaven-test/config:/config
+      # test disk agent socket (virtual disks only) and the folder it mounts disks under
+      - /run/diskhaven-test:/run/diskhaven
       - type: bind
-        source: /srv/diskhaven-dev/disks
+        source: /srv/diskhaven-test/disks
         target: /disks
         bind:
           propagation: rslave
-    mem_limit: 768m
-    cpus: 1.5
+    # virtual (loop) disks charge their I/O to this container's memory limit and can hit the OOM killer without
+    # the program using the memory; real disks do not. TEST_MEM=1536m tests with the production limit.
+    mem_limit: ${TEST_MEM:-3g}
+    cpus: 2
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]

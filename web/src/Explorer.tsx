@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
   FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, Link2, List, MoreVertical, PanelRight, Pencil,
-  RefreshCw, Rows3, Scissors, Search, Star, StarOff, Trash2, Upload,
+  Lock, RefreshCw, Rows3, Scissors, Search, Star, StarOff, Trash2, Upload,
 } from 'lucide-react'
 import { api } from './api'
 import { toast, toastError } from './dialogs'
@@ -13,11 +13,13 @@ import { propertiesDialog } from './Properties'
 import { SystemGauge } from './SystemGauge'
 import { hasPlugin, usePlugins } from './plugins'
 import { t } from './strings'
-import type { FileEntry } from './types'
+import type { DriveInfo, FileEntry } from './types'
 import { uploadFiles } from './conflicts'
 import { filesFromInput, uploadEvents } from './uploads'
+import { startTransfer } from './TransferBar'
 
-export interface Clipboard { mode: 'copy' | 'cut'; paths: string[] }
+/** Cut / copied items with the drive they are on ("" = main storage). */
+export interface Clipboard { mode: 'copy' | 'cut'; paths: string[]; drive: string }
 type SortKey = 'name' | 'modified' | 'type' | 'size'
 type Menu = { x: number; y: number; onItem: boolean }
 
@@ -28,16 +30,29 @@ const writePref = (k: string, v: string) => { try { localStorage.setItem(k, v) }
 
 interface Props {
   path: string
+  /** "" = main storage, otherwise the disk id; every call below names it explicitly */
+  drive: string
+  /** the disk's entry from the drive list (null for the main storage or while loading) */
+  driveInfo: DriveInfo | null
   version: number
   clipboard: Clipboard | null
   setClipboard: (c: Clipboard | null) => void
   navigate: (path: string) => void
   changed: () => void
-  onDropItems: (dest: string, e: React.DragEvent) => void
+  onDropItems: (dest: string, e: React.DragEvent, destDrive: string) => void
   storage: { total: number; free: number } | null
 }
 
-export function Explorer({ path, version, clipboard, setClipboard, navigate, changed, onDropItems, storage }: Props) {
+export function Explorer({ path, drive, driveInfo, version, clipboard, setClipboard, navigate, changed, onDropItems: dropOnDrive, storage }: Props) {
+  const onDisk = drive !== ''
+  // read-only disk: nothing that changes it is offered (the server and the kernel refuse it anyway)
+  const ro = onDisk && (driveInfo?.readOnly ?? true)
+  const d = onDisk ? drive : undefined
+  const tag = (list: FileEntry[]) => (onDisk ? list.map(e => ({ ...e, drive })) : list)
+  const onDropItems = (dest: string, e: React.DragEvent) => {
+    if (ro) { e.preventDefault(); toast(t.readOnlyDrive); return }
+    dropOnDrive(dest, e, drive)
+  }
   const [entries, setEntries] = useState<FileEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -51,7 +66,9 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   const [showHidden, setShowHiddenState] = useState(() => readPref('hv.hidden', '0') === '1')
   const setShowHidden = (v: boolean) => { setShowHiddenState(v); writePref('hv.hidden', v ? '1' : '0') }
   const [viewMenu, setViewMenu] = useState(false)
-  const plugins = usePlugins()
+  const basePlugins = usePlugins()
+  // sharing, favourites and previous versions belong to the main storage
+  const plugins = { ...basePlugins, has: (id: string) => basePlugins.has(id) && (!onDisk || !['sharing', 'quick', 'versions'].includes(id)) }
   const [favorites, setFavorites] = useState<Set<string>>(new Set())
   useEffect(() => { if (plugins.has('quick')) api.quick().then(q => setFavorites(new Set(q.favorites))).catch(() => {}) }, [plugins.has('quick'), version])
   const toggleFavorite = async (e: FileEntry) => {
@@ -79,30 +96,30 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
     if (!q) { setResults(null); return }
     setSearching(true)
     try {
-      const r = await api.search(path, q)
-      setResults({ q, entries: r.entries, truncated: r.truncated })
+      const r = await api.search(path, q, d)
+      setResults({ q, entries: tag(r.entries), truncated: r.truncated })
       setSelected(new Set())
     } catch (e) { toastError(e) }
     setSearching(false)
-  }, [path])
+  }, [path, drive])
 
   const resultsRef = useRef(results)
   resultsRef.current = results
   const load = useCallback(() => {
     if (resultsRef.current) void runSearch(resultsRef.current.q) // keep search results fresh after rename/delete
-    api.list(path)
-      .then(l => { setEntries(l.entries); setError(null) })
+    api.list(path, d)
+      .then(l => { setEntries(tag(l.entries)); setError(null) })
       .catch(e => { setEntries([]); setError(e.message) })
-  }, [path, runSearch])
+  }, [path, drive, runSearch])
 
-  useEffect(() => { setEntries(null); setSelected(new Set()); setFilter(''); setRenaming(null); setResults(null) }, [path])
+  useEffect(() => { setEntries(null); setSelected(new Set()); setFilter(''); setRenaming(null); setResults(null) }, [path, drive])
   useEffect(load, [load, version])
   useEffect(() => {
-    const on = (e: Event) => { if ((e as CustomEvent).detail === path) load() }
+    const on = (e: Event) => { const x = (e as CustomEvent<{ drive: string; path: string }>).detail; if (x.drive === drive && x.path === path) load() }
     uploadEvents.addEventListener('committed', on)
     return () => uploadEvents.removeEventListener('committed', on)
-  }, [path, load])
-  useEffect(() => { listRef.current?.focus({ preventScroll: true }) }, [path])
+  }, [path, drive, load])
+  useEffect(() => { listRef.current?.focus({ preventScroll: true }) }, [path, drive])
 
   const shown = useMemo(() => {
     if (results) return results.entries.filter(e => showHidden || !e.hidden)
@@ -126,10 +143,11 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
 
   // ---- actions ----------------------------------------------------------------------------
   const open = (e: FileEntry) => {
-    if (e.kind === 'File' && hasPlugin('quick')) void api.recent(e.path).catch(() => {})
+    if (e.problem) { toast(problemText(e.problem)); return }
+    if (e.kind === 'File' && hasPlugin('quick') && !onDisk) void api.recent(e.path).catch(() => {})
     if (e.kind === 'Folder') return navigate(e.path)
     if (previewKind(e.extension)) return setViewer(e)
-    window.location.href = api.contentUrl(e.path, true)
+    window.location.href = api.contentUrl(e.path, true, d)
   }
 
   const download = (list: FileEntry[]) => {
@@ -137,13 +155,13 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
     if (hasPlugin('archive') && (list.some(x => x.kind === 'Folder') || list.length > 3)) {
       // folders, or many files at once: one ZIP built on the fly, like a cloud drive
       const a = document.createElement('a')
-      a.href = api.archiveUrl(list.map(x => x.path), list.length === 1 ? list[0].name : path ? nameOf(path) : 'DiskHaven')
+      a.href = api.archiveUrl(list.map(x => x.path), list.length === 1 ? list[0].name : path ? nameOf(path) : (driveInfo?.name || 'DiskHaven'), d)
       document.body.appendChild(a); a.click(); a.remove()
       return
     }
     for (const e of list.filter(x => x.kind === 'File')) {
       const a = document.createElement('a')
-      a.href = api.contentUrl(e.path, true)
+      a.href = api.contentUrl(e.path, true, d)
       a.download = e.name
       document.body.appendChild(a)
       a.click()
@@ -152,9 +170,10 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   }
 
   const newFolder = async () => {
+    if (ro) return toast(t.readOnlyDrive)
     const name = uniqueName((entries ?? []).map(e => e.name), t.newFolder)
     try {
-      const r = await api.createFolder(path, name)
+      const r = await api.createFolder(path, name, d)
       load()
       changed()
       setSelected(new Set([r.path]))
@@ -165,13 +184,13 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   const commitRename = async (entry: FileEntry, value: string) => {
     setRenaming(null)
     const name = value.trim()
-    if (!name || name === entry.name) return
+    if (!name || name === entry.name || ro) return
     // shown with the new name at once; the server confirms (or the list is reloaded on error)
     const guess = (parentOf(entry.path) ? parentOf(entry.path) + '/' : '') + name
     setEntries(list => list && list.map(x => x.path === entry.path ? { ...x, name, path: guess, extension: x.kind === 'File' ? (name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : null) : null } : x))
     setSelected(new Set([guess]))
     try {
-      const r = await api.rename(entry.path, name)
+      const r = await api.rename(entry.path, name, d)
       setSelected(new Set([r.path]))
       load()
       changed()
@@ -180,18 +199,19 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
 
   const remove = async (list: FileEntry[]) => {
     if (list.length === 0) return
+    if (ro) return toast(t.readOnlyDrive)
     const gone = new Set(list.map(e => e.path))
     setEntries(l => l && l.filter(x => !gone.has(x.path)))   // disappears at once; the bin move runs behind
     setSelected(new Set())
     try {
-      const r = await api.remove(list.map(e => e.path))
+      const r = await api.remove(list.map(e => e.path), d)
       load()
       changed()
       toast(t.movedToTrash(r.items.length), {
         action: {
           label: t.undo,
           run: async () => {
-            try { for (const i of r.items) await api.restore(i.id) } catch (e) { toastError(e) }
+            try { for (const i of r.items) await api.restore(i.id, d) } catch (e) { toastError(e) }
             load()
             changed()
           },
@@ -202,22 +222,25 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
 
   const setHidden = async (list: FileEntry[], hidden: boolean) => {
     if (list.length === 0) return
+    if (ro) return toast(t.readOnlyDrive)
     const paths = new Set(list.map(e => e.path))
     setEntries(l => l && l.map(x => paths.has(x.path) ? { ...x, hidden } : x))
-    try { await api.setHidden([...paths], hidden); toast(t.hiddenDone(paths.size, hidden)); changed() }
+    try { await api.setHidden([...paths], hidden, d); toast(t.hiddenDone(paths.size, hidden)); changed() }
     catch (e) { toastError(e); load() }
   }
 
   const compress = async (list: FileEntry[]) => {
     if (list.length === 0) return
+    if (ro) return toast(t.readOnlyDrive)
     toast(t.compressing)
-    try { const r = await api.compress(list.map(e => e.path)); load(); changed(); setSelected(new Set([r.path])); setRenaming(r.path) }
+    try { const r = await api.compress(list.map(e => e.path), undefined, d); load(); changed(); setSelected(new Set([r.path])); setRenaming(r.path) }
     catch (e) { toastError(e) }
   }
 
   const extract = async (e: FileEntry) => {
+    if (ro) return toast(t.readOnlyDrive)
     toast(t.extracting)
-    try { const r = await api.extract(e.path); load(); changed(); setSelected(new Set([r.path])) }
+    try { const r = await api.extract(e.path, d); load(); changed(); setSelected(new Set([r.path])) }
     catch (err) { toastError(err) }
   }
 
@@ -228,14 +251,22 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
 
   const toClipboard = (mode: Clipboard['mode'], list: FileEntry[]) => {
     if (list.length === 0) return
-    setClipboard({ mode, paths: list.map(e => e.path) })
+    if (mode === 'cut' && ro) return toast(t.readOnlyDrive)
+    setClipboard({ mode, paths: list.map(e => e.path), drive })
     toast(mode === 'copy' ? `${list.length} öğe kopyalandı` : `${list.length} öğe kesildi`)
   }
 
   const paste = async () => {
     if (!clipboard) return
+    if (ro) return toast(t.readOnlyDrive)
     try {
-      const r = clipboard.mode === 'copy' ? await api.copy(clipboard.paths, path) : await api.move(clipboard.paths, path)
+      if (clipboard.drive !== drive || onDisk && clipboard.mode === 'copy') {
+        // between drives (and any copy on a disk): verified copy in the background, progress at the bottom
+        await startTransfer(clipboard.drive, clipboard.paths, drive, path, clipboard.mode === 'cut')
+        if (clipboard.mode === 'cut') setClipboard(null)
+        return
+      }
+      const r = clipboard.mode === 'copy' ? await api.copy(clipboard.paths, path, d) : await api.move(clipboard.paths, path, d)
       if (clipboard.mode === 'cut') setClipboard(null)
       setSelected(new Set(r.paths))
       load()
@@ -243,9 +274,9 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
     } catch (e) { toastError(e) }
   }
 
-  const pickUpload = (folder: boolean) => (folder ? folderInput : fileInput).current?.click()
+  const pickUpload = (folder: boolean) => (ro ? toast(t.readOnlyDrive) : (folder ? folderInput : fileInput).current?.click())
   const onPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) void uploadFiles(path, filesFromInput(e.target.files))
+    if (e.target.files && !ro) void uploadFiles(path, filesFromInput(e.target.files), drive)
     e.target.value = ''
   }
 
@@ -312,7 +343,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
     else if (k === 'Enter' && e.altKey && single) { handled(); void propertiesDialog(single, load) }
     else if (k === 'Enter' && single) { handled(); open(single) }
     else if (k === 'Delete') { handled(); void remove(sel) }
-    else if (k === 'F2' && single) { handled(); setRenaming(single.path) }
+    else if (k === 'F2' && single && !ro) { handled(); setRenaming(single.path) }
     else if (k === 'F5') { handled(); load() }
     else if (k === 'Escape') { setSelected(new Set()); setMenu(null) }
     else if (mod && k.toLowerCase() === 'a') { handled(); setSelected(new Set(shown.map(x => x.path))) }
@@ -327,7 +358,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   const dragStart = (e: React.DragEvent, entry: FileEntry) => {
     const paths = selected.has(entry.path) ? [...selected] : [entry.path]
     if (!selected.has(entry.path)) setSelected(new Set([entry.path]))
-    e.dataTransfer.setData('application/x-diskhaven', JSON.stringify(paths))
+    e.dataTransfer.setData('application/x-diskhaven', JSON.stringify({ drive, paths }))
     e.dataTransfer.effectAllowed = 'copyMove'
   }
 
@@ -335,7 +366,9 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
   const SortMark = ({ k }: { k: SortKey }) => (sort.key === k ? (sort.asc ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : null)
 
   const crumbs = path ? path.split('/') : []
-  const folderName = path ? nameOf(path) : t.thisNas
+  const rootName = onDisk ? (driveInfo?.name || t.disk) : t.thisNas
+  const folderName = path ? nameOf(path) : rootName
+  const space = onDisk ? (driveInfo && driveInfo.free != null ? { total: driveInfo.total, free: driveInfo.free } : null) : storage
   const selectedSize = sel.reduce((s, e) => s + (e.size ?? 0), 0)
 
   return (
@@ -344,16 +377,17 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
       <input ref={folderInput} type="file" hidden onChange={onPicked} {...{ webkitdirectory: '', directory: '' }} />
 
       <div className="commandbar" role="toolbar">
-        <button className="cmd" onClick={newFolder} title={`${t.newFolder} (Ctrl+Shift+N)`}><FolderPlus size={16} /> <span>{t.newFolder}</span></button>
-        <button className="cmd" onClick={() => pickUpload(false)}><Upload size={16} /> <span>{t.upload}</span></button>
-        <button className="cmd hide-sm" onClick={() => pickUpload(true)}><FolderUp size={16} /> <span>{t.uploadFolder}</span></button>
+        <button className="cmd" disabled={ro} onClick={newFolder} title={`${t.newFolder} (Ctrl+Shift+N)`}><FolderPlus size={16} /> <span>{t.newFolder}</span></button>
+        <button className="cmd" disabled={ro} onClick={() => pickUpload(false)}><Upload size={16} /> <span>{t.upload}</span></button>
+        <button className="cmd hide-sm" disabled={ro} onClick={() => pickUpload(true)}><FolderUp size={16} /> <span>{t.uploadFolder}</span></button>
         <span className="cmd-sep" />
-        <button className="cmd icon-only" disabled={!sel.length} onClick={() => toClipboard('cut', sel)} title={`${t.cut} (Ctrl+X)`}><Scissors size={16} /></button>
+        <button className="cmd icon-only" disabled={!sel.length || ro} onClick={() => toClipboard('cut', sel)} title={`${t.cut} (Ctrl+X)`}><Scissors size={16} /></button>
         <button className="cmd icon-only" disabled={!sel.length} onClick={() => toClipboard('copy', sel)} title={`${t.copy} (Ctrl+C)`}><Copy size={16} /></button>
-        <button className="cmd icon-only" disabled={!clipboard} onClick={paste} title={`${t.paste} (Ctrl+V)`}><ClipboardPaste size={16} /></button>
-        <button className="cmd icon-only" disabled={!single} onClick={() => single && setRenaming(single.path)} title={`${t.rename} (F2)`}><Pencil size={16} /></button>
-        <button className="cmd icon-only" disabled={!sel.length} onClick={() => remove(sel)} title={`${t.delete} (Del)`}><Trash2 size={16} /></button>
+        <button className="cmd icon-only" disabled={!clipboard || ro} onClick={paste} title={`${t.paste} (Ctrl+V)`}><ClipboardPaste size={16} /></button>
+        <button className="cmd icon-only" disabled={!single || ro} onClick={() => single && setRenaming(single.path)} title={`${t.rename} (F2)`}><Pencil size={16} /></button>
+        <button className="cmd icon-only" disabled={!sel.length || ro} onClick={() => remove(sel)} title={`${t.delete} (Del)`}><Trash2 size={16} /></button>
         <button className="cmd icon-only" disabled={!sel.some(e => e.kind === 'File')} onClick={() => download(sel)} title={t.download}><Download size={16} /></button>
+        {onDisk && !ro && <a className="cmd icon-only" href={`#/trash/${encodeURIComponent(drive)}`} title={t.diskTrash(rootName)}><Trash2 size={16} /> <span className="hide-sm">Çöp</span></a>}
         <span className="cmd-grow" />
         {view === 'icons' && (
           <label className="size-slider hide-sm" title={`${t.iconSize} (Ctrl + fare tekerleği)`}>
@@ -395,7 +429,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
           </form>
         ) : (
           <div className="crumbs" onClick={e => e.target === e.currentTarget && setEditingPath(true)}>
-            <button className={`crumb ${crumbs.length === 0 ? 'current' : ''}`} onClick={() => navigate('')}>{t.thisNas}</button>
+            <button className={`crumb ${crumbs.length === 0 ? 'current' : ''}`} onClick={() => navigate('')}>{ro && <Lock size={12} />} {rootName}</button>
             {crumbs.map((c, i) => (
               <span key={i} className="crumb-wrap">
                 <ChevronRight size={14} className="crumb-sep" />
@@ -413,6 +447,12 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
         </label>
       </div>
 
+      {ro && (
+        <p className="info-strip ro-strip">
+          <Lock size={14} /> <span>{t.readOnlyStrip}</span>
+          {driveInfo && <a className="link" href="#/disks">{t.changeOnDisks}</a>}
+        </p>
+      )}
       {results && (
         <p className="info-strip search-strip">
           <span>{t.searchResults(results.q, results.entries.length, results.truncated)}</span>
@@ -481,7 +521,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
                   <FileIcon entry={e} />
                   {renaming === e.path
                     ? <RenameInput entry={e} onDone={v => commitRename(e, v)} onCancel={() => setRenaming(null)} />
-                    : <span className="li-name" title={e.name}>{e.name}</span>}
+                    : <span className="li-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}</span>}
                 </div>
               ))}
             </div>
@@ -501,7 +541,7 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
                   <Thumb entry={e} size={iconSize} />
                   {renaming === e.path
                     ? <RenameInput entry={e} onDone={v => commitRename(e, v)} onCancel={() => setRenaming(null)} />
-                    : <span className="tile-name" title={e.name}>{e.name}</span>}
+                    : <span className="tile-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}</span>}
                 </div>
               ))}
             </div>
@@ -515,38 +555,38 @@ export function Explorer({ path, version, clipboard, setClipboard, navigate, cha
         {sel.length > 0 && <span>{t.selected(sel.length)}{selectedSize > 0 ? ` · ${formatSize(selectedSize)}` : ''}</span>}
         <span className="grow" />
         {plugins.has('gauge') && <SystemGauge />}
-        {storage && <span className="hide-sm">{t.free(formatSize(storage.free), formatSize(storage.total))}</span>}
+        {space && <span className="hide-sm">{t.free(formatSize(space.free), formatSize(space.total))}</span>}
       </footer>
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={menu.onItem ? [
           single && { label: single.kind === 'Folder' ? t.open : previewKind(single.extension) ? t.open : t.download, icon: <FolderOpen size={16} />, run: () => open(single) },
-          plugins.has('archive') && single?.extension === 'zip' && { label: t.extract, icon: <FolderInput size={16} />, run: () => extract(single) },
+          !ro && plugins.has('archive') && single?.extension === 'zip' && { label: t.extract, icon: <FolderInput size={16} />, run: () => extract(single) },
           (plugins.has('archive') || sel.every(e => e.kind === 'File')) && { label: sel.length === 1 && single?.kind === 'File' || !plugins.has('archive') ? t.download : t.downloadZip, icon: <Download size={16} />, run: () => download(sel) },
           'sep',
-          { label: t.cut, icon: <Scissors size={16} />, hint: 'Ctrl+X', run: () => toClipboard('cut', sel) },
+          !ro && { label: t.cut, icon: <Scissors size={16} />, hint: 'Ctrl+X', run: () => toClipboard('cut', sel) },
           { label: t.copy, icon: <Copy size={16} />, hint: 'Ctrl+C', run: () => toClipboard('copy', sel) },
           'sep',
-          single && { label: t.rename, icon: <Pencil size={16} />, hint: 'F2', run: () => setRenaming(single.path) },
+          !ro && single && { label: t.rename, icon: <Pencil size={16} />, hint: 'F2', run: () => setRenaming(single.path) },
           plugins.has('sharing') && single && { label: t.share, icon: <Link2 size={16} />, run: () => void import('./Sharing').then(m => m.shareDialog(single)) },
           plugins.has('quick') && single && (favorites.has(single.path)
             ? { label: 'Favorilerden çıkar', icon: <StarOff size={16} />, run: () => toggleFavorite(single) }
             : { label: 'Favorilere ekle', icon: <Star size={16} />, run: () => toggleFavorite(single) }),
-          plugins.has('archive') && { label: t.compress, icon: <FileArchive size={16} />, run: () => compress(sel) },
+          !ro && plugins.has('archive') && { label: t.compress, icon: <FileArchive size={16} />, run: () => compress(sel) },
           { label: t.copyPath, icon: <Copy size={16} />, hint: 'Ctrl+Shift+C', run: () => copyPath(sel) },
-          sel.every(e => e.hidden)
+          !ro && (sel.every(e => e.hidden)
             ? { label: t.unhide, icon: <Eye size={16} />, run: () => setHidden(sel, false) }
-            : { label: t.hide, icon: <EyeOff size={16} />, run: () => setHidden(sel, true) },
+            : { label: t.hide, icon: <EyeOff size={16} />, run: () => setHidden(sel, true) }),
           single && results && { label: t.openLocation, icon: <FolderOpen size={16} />, run: () => navigate(parentOf(single.path)) },
-          { label: t.delete, icon: <Trash2 size={16} />, hint: 'Del', run: () => remove(sel) },
+          !ro && { label: t.delete, icon: <Trash2 size={16} />, hint: 'Del', run: () => remove(sel) },
           'sep',
           single && { label: t.properties, icon: <Info size={16} />, hint: 'Alt+Enter', run: () => void propertiesDialog(single, load) },
         ] : [
-          { label: t.newFolder, icon: <FolderPlus size={16} />, hint: 'Ctrl+Shift+N', run: newFolder },
-          clipboard && { label: t.paste, icon: <ClipboardPaste size={16} />, hint: 'Ctrl+V', run: paste },
+          !ro && { label: t.newFolder, icon: <FolderPlus size={16} />, hint: 'Ctrl+Shift+N', run: newFolder },
+          !ro && clipboard && { label: t.paste, icon: <ClipboardPaste size={16} />, hint: 'Ctrl+V', run: paste },
           'sep',
-          { label: t.uploadFiles, icon: <Upload size={16} />, run: () => pickUpload(false) },
-          { label: t.uploadFolder, icon: <FolderUp size={16} />, run: () => pickUpload(true) },
+          !ro && { label: t.uploadFiles, icon: <Upload size={16} />, run: () => pickUpload(false) },
+          !ro && { label: t.uploadFolder, icon: <FolderUp size={16} />, run: () => pickUpload(true) },
           'sep',
           { label: t.refresh, icon: <RefreshCw size={16} />, hint: 'F5', run: load },
           { label: t.selectAll, hint: 'Ctrl+A', run: () => setSelected(new Set(shown.map(x => x.path))) },
@@ -598,12 +638,12 @@ function Row(p: RowProps) {
       <td className="c-name">
         <FileIcon entry={e} />
         {p.renaming ? <RenameInput entry={e} onDone={p.onRename} onCancel={p.onCancelRename} />
-          : <span className="name-text" title={e.name}>{e.name}{p.location !== undefined && <small className="loc">/{p.location}</small>}</span>}
+          : <span className="name-text" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}{p.location !== undefined && <small className="loc">/{p.location}</small>}</span>}
       </td>
       <td className="c-date">{formatDate(e.modified)}</td>
       <td className="c-type">{typeName(e)}</td>
       <td className="c-size" title={folder && e.files != null ? t.contents(e.files, e.folders ?? 0) : undefined}>
-        {folder && e.size == null ? <span className="calc">{t.calculating}</span> : formatSize(e.size)}
+        {folder && e.size == null ? (e.drive ? '' : <span className="calc">{t.calculating}</span>) : formatSize(e.size)}
       </td>
       <td className="c-more"><button className="icon-btn" onClick={p.onMore} aria-label="Diğer"><MoreVertical size={16} /></button></td>
     </tr>
@@ -637,7 +677,7 @@ export function RenameInput({ entry, onDone, onCancel }: { entry: FileEntry; onD
 function Thumb({ entry, size }: { entry: FileEntry; size: number }) {
   const [broken, setBroken] = useState(false)
   if (entry.kind === 'File' && previewKind(entry.extension) === 'image' && !broken)
-    return <img className="thumb" src={api.contentUrl(entry.path)} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} />
+    return <img className="thumb" src={api.contentUrl(entry.path, false, entry.drive)} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} />
   return <span className="thumb icon"><FileIcon entry={entry} size={Math.round(size * 0.62)} /></span>
 }
 
@@ -672,3 +712,14 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
   )
 }
 
+
+/** Why a listed item cannot be opened. */
+function problemText(p: 'bad-name' | 'special') {
+  return p === 'bad-name'
+    ? 'Bu öğenin adı okunamıyor (eski bir Windows/Linux sisteminden kalma karakterler). Açılamaz ve kopyalanamaz; adını kendi bilgisayarında değiştir.'
+    : 'Özel dosya (boru, soket ya da aygıt): içinde veri yok, açılamaz ve kopyalanmaz.'
+}
+
+function ProblemMark({ p }: { p: 'bad-name' | 'special' }) {
+  return <span className="problem-mark" aria-label={problemText(p)}>{p === 'bad-name' ? ' ⚠ adı okunamıyor' : ' · özel dosya'}</span>
+}

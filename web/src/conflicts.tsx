@@ -11,28 +11,28 @@ type Choice = 'replace' | 'both' | 'skip' | null
  * have the name of a file already there, ask once for all of them. Files inside dropped folders and uploads
  * into the hidden folder are never asked about (they keep both, as before).
  */
-export async function uploadFiles(destination: string, files: Picked[]) {
+export async function uploadFiles(destination: string, files: Picked[], drive = '') {
   if (files.length === 0) return
   let taken = new Set<string>()
   if (!destination.startsWith('hideaway:')) {
     try {
-      const listing = await api.list(destination)
+      const listing = await api.list(destination, drive || undefined)
       taken = new Set(listing.entries.filter(e => e.kind === 'File').map(e => e.name.toLocaleLowerCase('tr-TR')))
     } catch { /* cannot list: just upload, the server keeps both */ }
   }
   const clashes = files.filter(f => !f.relativeName.includes('/') && taken.has(f.relativeName.toLocaleLowerCase('tr-TR')))
-  if (clashes.length === 0) return uploads.add(destination, files)
+  if (clashes.length === 0) return uploads.add(destination, files, drive)
 
-  const choice = await mount<Choice>(done => <ReplaceDialog names={clashes.map(c => c.relativeName)} total={files.length} done={done} />)
+  const choice = await mount<Choice>(done => <ReplaceDialog names={clashes.map(c => c.relativeName)} total={files.length} done={done} onDisk={!!drive} />)
   if (choice === null) return
   const clashing = new Set(clashes)
   uploads.add(destination, files
     .filter(f => choice !== 'skip' || !clashing.has(f))
-    .map(f => ({ ...f, replace: choice === 'replace' && clashing.has(f) })))
+    .map(f => ({ ...f, replace: choice === 'replace' && clashing.has(f) })), drive)
 }
 
-function ReplaceDialog({ names, total, done }: { names: string[]; total: number; done: (c: Choice) => void }) {
-  const versions = hasPlugin('versions')
+function ReplaceDialog({ names, total, done, onDisk }: { names: string[]; total: number; done: (c: Choice) => void; onDisk: boolean }) {
+  const versions = hasPlugin('versions') && !onDisk   // previous versions are kept for the main storage only
   return (
     <Modal onClose={() => done(null)}>
       <p className="modal-title">{names.length === 1 ? `"${names[0]}" bu klasörde zaten var` : `${names.length} dosya bu klasörde zaten var`}</p>

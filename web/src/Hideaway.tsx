@@ -131,7 +131,7 @@ function VaultExplorer({ state, onLocked }: { state: HideawayState; onLocked: ()
   useEffect(() => { setEntries(null); setSelected(new Set()); load() }, [load])
   const dest = `hideaway:${folder}`
   useEffect(() => {
-    const on = (e: Event) => { if ((e as CustomEvent).detail === dest) load() }
+    const on = (e: Event) => { const d = (e as CustomEvent<{ drive: string; path: string }>).detail; if (!d.drive && d.path === dest) load() }
     uploadEvents.addEventListener('committed', on)
     return () => uploadEvents.removeEventListener('committed', on)
   }, [dest, load])

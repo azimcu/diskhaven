@@ -10,7 +10,8 @@ import { Transfers } from './Transfers'
 import { TrashView } from './TrashView'
 import { loadPlugins, usePlugins } from './plugins'
 import { Tree } from './Tree'
-import type { AuthState } from './types'
+import type { AuthState, DriveInfo } from './types'
+import { startTransfer, TransferBar } from './TransferBar'
 import { uploadFiles } from './conflicts'
 import { filesFromDrop } from './uploads'
 
@@ -20,18 +21,25 @@ const SharesView = lazy(() => import('./Sharing').then(m => ({ default: m.Shares
 const AdminPanel = lazy(() => import('./Admin'))
 const HideawayView = lazy(() => import('./Hideaway'))
 
-// Location lives in the URL hash (#/files/Belgeler/Okul, #/trash) so browser back/forward and reload work.
+// Location lives in the URL hash so browser back/forward and reload work:
+// #/files/Belgeler/Okul (main storage), #/d/<disk id>/Belgeler (a disk), #/trash, #/trash/<disk id>.
 type Special = 'trash' | 'disks' | 'shares' | 'users' | 'admin' | 'hideaway'
-type Route = { view: 'files'; path: string } | { view: Special }
+type Route = { view: 'files'; drive: string; path: string } | { view: Special; drive?: string }
 
 function parseHash(): Route {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ''))
-  if (h === 'trash' || h === 'disks' || h === 'shares' || h === 'hideaway') return { view: h }
+  if (h === 'disks' || h === 'shares' || h === 'hideaway') return { view: h }
+  if (h === 'trash' || h.startsWith('trash/')) return { view: 'trash', drive: h.slice(6) }
   if (h === 'users' || h.startsWith('admin')) return { view: 'admin' }
-  return { view: 'files', path: h.startsWith('files') ? h.slice(5).replace(/^\/+|\/+$/g, '') : '' }
+  if (h.startsWith('d/')) {
+    const [drive, ...rest] = h.slice(2).split('/')
+    return { view: 'files', drive, path: rest.join('/').replace(/^\/+|\/+$/g, '') }
+  }
+  return { view: 'files', drive: '', path: h.startsWith('files') ? h.slice(5).replace(/^\/+|\/+$/g, '') : '' }
 }
 
-const hashFor = (path: string) => `#/files${path ? '/' + path.split('/').map(encodeURIComponent).join('/') : ''}`
+const enc = (path: string) => (path ? '/' + path.split('/').map(encodeURIComponent).join('/') : '')
+const hashFor = (path: string, drive = '') => (drive ? `#/d/${encodeURIComponent(drive)}${enc(path)}` : `#/files${enc(path)}`)
 
 export function App() {
   const [auth, setAuth] = useState<AuthState | null>(null)
@@ -43,6 +51,7 @@ export function App() {
   const [version, setVersion] = useState(0)
   const [clipboard, setClipboard] = useState<Clipboard | null>(null)
   const [storage, setStorage] = useState<{ total: number; free: number } | null>(null)
+  const [drives, setDrives] = useState<DriveInfo[]>([])
   const [drawer, setDrawer] = useState(false)
   const [userMenu, setUserMenu] = useState(false)
 
@@ -55,32 +64,61 @@ export function App() {
     return () => { window.removeEventListener('diskhaven:unauthorized', onUnauthorized); window.removeEventListener('hashchange', onHash) }
   }, [])
 
+  const loadDrives = useCallback(() => api.drives().then(setDrives).catch(() => {}), [])
   const changed = useCallback(() => {
     setVersion(v => v + 1)
     api.storage().then(setStorage).catch(() => {})
-  }, [])
+    void loadDrives()
+  }, [loadDrives])
+  useEffect(() => {
+    if (!auth?.user) return
+    const timer = window.setInterval(loadDrives, 30000)
+    return () => window.clearInterval(timer)
+  }, [auth?.user, loadDrives])
   useEffect(() => { if (auth?.user) { changed(); void loadPlugins() } }, [auth?.user, changed])
   const plugins = usePlugins()
 
-  const navigate = useCallback((path: string) => { location.hash = hashFor(path) }, [])
+  const currentDrive = route.view === 'files' ? route.drive : ''
+  const navigate = useCallback((path: string) => { location.hash = hashFor(path, currentDrive) }, [currentDrive])
+  const driveInfo = currentDrive ? drives.find(d => d.id === currentDrive) ?? null : null
 
-  /** Drop onto a folder: items dragged inside DiskHaven are moved (Ctrl = copy), files from the computer are uploaded. */
-  const onDropItems = useCallback(async (dest: string, e: React.DragEvent) => {
+  /** Opens a disk like a drive in "This PC": mounted first (read-only unless set otherwise), then shown. */
+  const openDrive = useCallback(async (d: DriveInfo) => {
+    if (d.system) return toast(`${d.name || 'Bu disk'} bir sistem diski (${d.systemMount ?? 'sunucu kullanıyor'}). DiskHaven dokunmaz.`)
+    if (d.kind === 'main') { location.hash = hashFor(''); return }
+    try {
+      if (d.state !== 'mounted') { toast(`${d.name} açılıyor…`); await api.openDrive(d.id) }
+      await loadDrives()
+      location.hash = hashFor('', d.id)
+    } catch (e) { toastError(e) }
+  }, [loadDrives])
+
+  /**
+   * Drop onto a folder of drive <destDrive>: items dragged inside DiskHaven are moved (Ctrl = copy) — on the same
+   * drive at once, between drives as a verified background transfer — and files from the computer are uploaded.
+   */
+  const onDropItems = useCallback(async (dest: string, e: React.DragEvent, destDrive = '') => {
     e.preventDefault()
     const internal = e.dataTransfer.getData('application/x-diskhaven')
     if (internal) {
-      const paths: string[] = JSON.parse(internal)
+      const parsed = JSON.parse(internal) as { drive: string; paths: string[] } | string[]
+      const from = Array.isArray(parsed) ? { drive: '', paths: parsed } : parsed
       const copy = e.ctrlKey || e.altKey
-      const sources = paths.filter(p => p !== dest)
+      const sources = from.paths.filter(p => !(from.drive === destDrive && p === dest))
       if (sources.length === 0) return
       try {
-        const r = copy ? await api.copy(sources, dest) : await api.move(sources, dest)
+        if (from.drive !== destDrive || (destDrive && copy)) {
+          await startTransfer(from.drive, sources, destDrive, dest, !copy)
+          return
+        }
+        const d = destDrive || undefined
+        const r = copy ? await api.copy(sources, dest, d) : await api.move(sources, dest, d)
         toast(`${r.paths.length} öğe ${copy ? 'kopyalandı' : 'taşındı'}`)
       } catch (err) { toastError(err) }
       changed()
       return
     }
-    if (e.dataTransfer.types.includes('Files')) await uploadFiles(dest, await filesFromDrop(e.dataTransfer))
+    if (e.dataTransfer.types.includes('Files')) await uploadFiles(dest, await filesFromDrop(e.dataTransfer), destDrive)
   }, [changed])
 
   const changePassword = async () => {
@@ -129,16 +167,19 @@ export function App() {
       </header>
       <div className="body">
         <div className={`side ${drawer ? 'open' : ''}`}>
-          <Tree current={route.view === 'files' ? route.path : null} special={route.view === 'files' ? null : route.view}
-            version={version} onOpen={navigate} onOpenSpecial={v => { location.hash = `#/${v}` }}
-            isAdmin={!!auth.isAdmin} onDropItems={onDropItems} storage={storage} />
+          <Tree current={route.view === 'files' && !route.drive ? route.path : null} special={route.view === 'files' ? null : route.view}
+            currentDrive={route.view === 'files' ? route.drive : null} drives={drives} onOpenDrive={openDrive}
+            version={version} onOpen={p => { location.hash = hashFor(p) }} onOpenSpecial={v => { location.hash = `#/${v}` }}
+            isAdmin={!!auth.isAdmin} onDropItems={(dest, e) => onDropItems(dest, e, '')} storage={storage} />
         </div>
         {drawer && <div className="side-backdrop" onClick={() => setDrawer(false)} />}
         <Suspense fallback={<div className="main-col"><div className="loading"><span className="spinner" /></div></div>}>
         {route.view === 'files'
-          ? <Explorer path={route.path} version={version} clipboard={clipboard} setClipboard={setClipboard}
+          ? <Explorer key={route.drive} path={route.path} drive={route.drive} driveInfo={driveInfo} version={version}
+              clipboard={clipboard} setClipboard={setClipboard}
               navigate={navigate} changed={changed} onDropItems={onDropItems} storage={storage} />
-          : route.view === 'trash' ? <TrashView onChanged={changed} />
+          : route.view === 'trash' ? <TrashView key={route.drive ?? ''} drive={route.drive ?? ''}
+              driveName={route.drive ? drives.find(d => d.id === route.drive)?.name ?? t.disk : null} onChanged={changed} />
           : route.view === 'shares' && plugins.has('sharing') ? <SharesView />
           : route.view === 'hideaway' && plugins.has('vault') ? <HideawayView />
           : route.view === 'admin' && auth.isAdmin ? <AdminPanel me={auth.user} />
@@ -147,6 +188,7 @@ export function App() {
         </Suspense>
       </div>
       <Transfers />
+      <TransferBar onFinished={changed} />
       <Toasts />
     </div>
   )

@@ -17,18 +17,55 @@ public static class SyncPlanner
     {
         var actions = new List<SyncAction>();
         var skipped = new List<string>();
+        var stats = new Stats();
         var list = NormalizeFolders(folders);
         foreach (var folder in list)
         {
-            var source = Path.Combine(sourceRoot, folder);
+            var source = Path.Combine(sourceRoot, folder.Replace('/', Path.DirectorySeparatorChar));
             if (!Directory.Exists(source))
             {
-                skipped.Add($"{folder} (klasör ana diskte yok)");
+                // no source folder means no comparison at all: nothing on the target is deleted
+                skipped.Add($"{folder} (klasör kaynakta yok)");
                 continue;
             }
-            Compare(source, Path.Combine(targetRoot, folder), folder, actions, skipped, ct);
+            Compare(source, Path.Combine(targetRoot, folder.Replace('/', Path.DirectorySeparatorChar)), folder, actions, skipped, stats, ct);
         }
-        return new SyncPlan(list, DetectMoves(actions, targetRoot), skipped, DateTimeOffset.UtcNow);
+        var final = DetectMoves(actions, targetRoot);
+        // what leaves the target, in files: a deleted folder is one action but may hold thousands of files,
+        // and a file that only moved to another place on the target is not lost
+        var deleted = stats.ReplacedFiles + final.Count(a => a.Kind == SyncActionKind.Delete);
+        var targetFiles = stats.TargetFiles;
+        var deletedFolders = final.Where(a => a.Kind == SyncActionKind.DeleteFolder).ToList();
+        foreach (var folder in deletedFolders)
+        {
+            var inside = CountFiles(Path.Combine(targetRoot, folder.Path.Replace('/', Path.DirectorySeparatorChar)));
+            deleted += inside;
+            targetFiles += inside;
+        }
+        deleted -= final.Count(a => a.Kind == SyncActionKind.Move
+            && deletedFolders.Any(f => a.TargetPath!.StartsWith(f.Path + "/", StringComparison.Ordinal)));
+        return new SyncPlan(list, final, skipped, DateTimeOffset.UtcNow,
+            stats.SourceFiles, targetFiles, Math.Max(deleted, 0));
+    }
+
+    private sealed class Stats
+    {
+        public int SourceFiles;
+        public int TargetFiles;
+        /// <summary>Target files that go to the recycle bin because a file became a folder or the other way round.</summary>
+        public int ReplacedFiles;
+    }
+
+    private static int CountFiles(string folder)
+    {
+        try
+        {
+            return new DirectoryInfo(folder).EnumerateFiles("*", new EnumerationOptions
+            {
+                RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = 0,
+            }).Count();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return 0; }
     }
 
     /// <summary>
@@ -104,9 +141,20 @@ public static class SyncPlanner
         return result.Order(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static void Compare(string source, string target, string rel, List<SyncAction> actions, List<string> skipped, CancellationToken ct)
+    private static void Compare(string source, string target, string rel, List<SyncAction> actions, List<string> skipped,
+        Stats stats, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+
+        List<FileSystemInfo> entries;
+        try { entries = new DirectoryInfo(source).EnumerateFileSystemInfos().ToList(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // one unreadable folder must not stop the backup, and must never make its target look "deleted"
+            skipped.Add($"{rel} (kaynak klasör okunamadı: {e.Message})");
+            return;
+        }
+
         var targetExists = Directory.Exists(target);
         if (!targetExists)
             actions.Add(new SyncAction(SyncActionKind.CreateFolder, rel));
@@ -114,25 +162,61 @@ public static class SyncPlanner
         // target side, case-insensitive like the disks themselves
         var existing = new Dictionary<string, FileSystemInfo>(StringComparer.OrdinalIgnoreCase);
         if (targetExists)
-            foreach (var info in new DirectoryInfo(target).EnumerateFileSystemInfos())
-                if (info.LinkTarget is null)
-                    existing[info.Name] = info;
+        {
+            try
+            {
+                foreach (var info in new DirectoryInfo(target).EnumerateFileSystemInfos())
+                    if (info.LinkTarget is null && !VaultRoot.IsInternalName(info.Name))
+                        existing[info.Name] = info;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                skipped.Add($"{rel} (hedef klasör okunamadı: {e.Message}); bu klasörde hiçbir şey değiştirilmedi");
+                return;
+            }
+            stats.TargetFiles += existing.Values.Count(v => v is FileInfo);
+        }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var info in new DirectoryInfo(source).EnumerateFileSystemInfos().OrderBy(i => i.Name, StringComparer.Ordinal))
+        // a source entry that is skipped must protect the same name on the target from the delete pass
+        void Keep(string sourceName, string why)
         {
-            if (info.LinkTarget is not null)
-                continue;
+            seen.Add(sourceName);
+            if (existing.TryGetValue(sourceName, out var twin))
+                seen.Add(twin.Name);
+            skipped.Add(why);
+        }
+
+        foreach (var info in entries.OrderBy(i => i.Name, StringComparer.Ordinal))
+        {
             var childRel = $"{rel}/{info.Name}";
+            // DiskHaven's own files (markers, trash, temporary copies) are never part of a backup; a same-named
+            // internal entry on the target is ours too and must never be deleted by the mirror
+            if (VaultRoot.IsInternalName(info.Name))
+            {
+                seen.Add(info.Name);
+                continue;
+            }
+            if (info.LinkTarget is not null)
+            {
+                Keep(info.Name, $"{childRel} (sembolik bağlantı; kopyalanmadı)");
+                continue;
+            }
+            // a name that is not valid UTF-8 reaches .NET with U+FFFD in it and cannot be opened by that name
+            if (info.Name.Contains('�') && !File.Exists(info.FullName) && !Directory.Exists(info.FullName))
+            {
+                Keep(info.Name, $"{childRel} (adı geçerli UTF-8 değil; kopyalanmadı)");
+                continue;
+            }
             try { FileNames.Validate(info.Name); }
             catch (VaultPathException)
             {
-                skipped.Add($"{childRel} (adı Windows/exFAT'ta geçersiz)");
+                Keep(info.Name, $"{childRel} (adı Windows/exFAT'ta geçersiz)");
                 continue;
             }
             if (!seen.Add(info.Name))
             {
-                skipped.Add($"{childRel} (aynı adda, sadece büyük/küçük harfi farklı başka bir öğe var)");
+                skipped.Add($"{childRel} (aynı adda, sadece büyük/küçük harfi farklı başka bir öğe var; hedef disk ikisini ayırt edemiyor)");
                 continue;
             }
             existing.TryGetValue(info.Name, out var other);
@@ -141,17 +225,28 @@ public static class SyncPlanner
 
             if (info is DirectoryInfo dir)
             {
+                // the old file goes to the recycle bin when the executor creates the folder (a separate delete
+                // action would run later and throw away the folder that was just copied)
                 if (other is FileInfo)
-                    actions.Add(new SyncAction(SyncActionKind.Delete, childRel, ((FileInfo)other).Length, MtimeUtc: ((FileInfo)other).LastWriteTimeUtc));
+                    stats.ReplacedFiles++;
                 // compare against the folder as it exists now (its case may still be fixed first)
                 var targetDir = other is DirectoryInfo ? other.FullName : Path.Combine(target, info.Name);
-                Compare(dir.FullName, targetDir, childRel, actions, skipped, ct);
+                Compare(dir.FullName, targetDir, childRel, actions, skipped, stats, ct);
             }
             else if (info is FileInfo file)
             {
+                if (SpecialFiles.IsSpecial(file.FullName))
+                {
+                    Keep(info.Name, $"{childRel} (özel dosya; içinde veri yok, kopyalanmadı)");
+                    continue;
+                }
+                stats.SourceFiles++;
                 if (other is DirectoryInfo)
                 {
-                    actions.Add(new SyncAction(SyncActionKind.DeleteFolder, childRel));
+                    // the old folder goes to the recycle bin when the executor puts the file in its place
+                    var inside = CountFiles(other.FullName);
+                    stats.ReplacedFiles += inside;
+                    stats.TargetFiles += inside;
                     actions.Add(new SyncAction(SyncActionKind.Copy, childRel, file.Length, MtimeUtc: file.LastWriteTimeUtc));
                 }
                 else if (other is FileInfo old)
@@ -164,7 +259,7 @@ public static class SyncPlanner
             }
         }
 
-        // on the backup but no longer on the main disk
+        // on the target but no longer on the source
         foreach (var (name, info) in existing)
         {
             if (seen.Contains(name))

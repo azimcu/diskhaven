@@ -52,9 +52,14 @@ builder.Services.AddHostedService<Housekeeping>();
 builder.Services.AddHostedService<FolderSizeScanner>();
 builder.Services.AddSingleton<DiskAgentClient>();
 builder.Services.AddSingleton(new DiskSettingsStore(configDir));
+builder.Services.AddSingleton<MountTable>();
 builder.Services.AddSingleton<DiskService>();
-builder.Services.AddSingleton<SyncJobRunner>();
-builder.Services.AddHostedService<SyncScheduler>();
+builder.Services.AddSingleton<Drives>();
+builder.Services.AddSingleton<ActiveJobs>();
+builder.Services.AddSingleton<TransferJobRunner>();
+builder.Services.AddSingleton(new BackupStore(configDir));
+builder.Services.AddSingleton<BackupJobRunner>();
+builder.Services.AddHostedService<BackupScheduler>();
 builder.AddDiskHavenTelemetry();
 builder.Services.AddProblemDetails();
 builder.Services.ConfigureHttpJsonOptions(o =>
@@ -208,39 +213,43 @@ auth.MapPost("/password", async (PasswordRequest req, ClaimsPrincipal user, Http
 // ---- files ------------------------------------------------------------------------------
 var files = app.MapGroup("/api/files").RequireAuthorization().AddEndpointFilter(Telemetry.CountFileOperation);
 
-files.MapGet("/", (string? path, FileBrowser browser) =>
-    Guard(() => Results.Ok(new { path = VaultRoot.Normalize(path), entries = browser.List(path) })));
+// Every file endpoint takes an optional "drive": missing or "" is the main storage (as before), otherwise a disk id.
+files.MapGet("/", (string? path, string? drive, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => Results.Ok(new { path = VaultRoot.Normalize(path), entries = drives.Resolve(drive, user).Browser.List(path) })));
 
-files.MapGet("/content", (string path, bool? download, HttpContext ctx, FileBrowser browser) => Guard(() =>
+files.MapGet("/content", (string path, string? drive, bool? download, HttpContext ctx, Drives drives) => Guard(() =>
 {
-    return ServeFile(ctx, browser.GetFile(path), download == true);
+    return ServeFile(ctx, drives.Resolve(drive, ctx.User).Browser.GetFile(path), download == true);
 }));
 
-files.MapPost("/folder", (FolderRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { path = ops.CreateFolder(req.Parent, req.Name) }))).LogsActivity("folder");
+files.MapPost("/folder", (FolderRequest req, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => Results.Ok(new { path = drives.Resolve(req.Drive, user).Ops.CreateFolder(req.Parent, req.Name) }))).LogsActivity("folder");
 
-files.MapPost("/rename", (RenameRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { path = ops.Rename(req.Path, req.NewName) }))).LogsActivity("rename");
+files.MapPost("/rename", (RenameRequest req, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => Results.Ok(new { path = drives.Resolve(req.Drive, user).Ops.Rename(req.Path, req.NewName) }))).LogsActivity("rename");
 
-files.MapPost("/move", (TransferRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { paths = ops.Move(req.Paths, req.Destination) }))).LogsActivity("move");
+// move / copy inside one drive; between drives the transfer job is used (verified, in the background)
+files.MapPost("/move", (TransferRequest req, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => Results.Ok(new { paths = drives.Resolve(req.Drive, user).Ops.Move(req.Paths, req.Destination) }))).LogsActivity("move");
 
-files.MapPost("/copy", (TransferRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { paths = ops.Copy(req.Paths, req.Destination) }))).LogsActivity("copy");
+files.MapPost("/copy", (TransferRequest req, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => Results.Ok(new { paths = drives.Resolve(req.Drive, user).Ops.Copy(req.Paths, req.Destination) }))).LogsActivity("copy");
 
-files.MapPost("/delete", (DeleteRequest req, FileOperations ops) =>
-    Guard(() => Results.Ok(new { items = ops.Delete(req.Paths) }))).LogsActivity("delete");
+files.MapPost("/delete", (DeleteRequest req, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => Results.Ok(new { items = drives.Resolve(req.Drive, user).Ops.Delete(req.Paths) }))).LogsActivity("delete");
 
-files.MapGet("/search", (string? path, string q, FileBrowser browser, CancellationToken ct) => Guard(() =>
+files.MapGet("/search", (string? path, string? drive, string q, ClaimsPrincipal user, Drives drives, CancellationToken ct) => Guard(() =>
 {
     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
     timeout.CancelAfter(TimeSpan.FromSeconds(20));
-    var r = browser.Search(path, q, 500, timeout.Token);
+    var r = drives.Resolve(drive, user).Browser.Search(path, q, 500, timeout.Token);
     return Results.Ok(new { path = VaultRoot.Normalize(path), entries = r.Entries, truncated = r.Truncated });
 }));
 
-files.MapPost("/hidden", (HiddenRequest req, VaultRoot vault, FileBrowser browser) => Guard(() =>
+files.MapPost("/hidden", (HiddenRequest req, ClaimsPrincipal user, Drives drives) => Guard(() =>
 {
+    var vault = drives.Resolve(req.Drive, user).Root;
+    vault.EnsureWritable();
     foreach (var p in req.Paths)
     {
         var full = vault.Resolve(p);
@@ -251,38 +260,50 @@ files.MapPost("/hidden", (HiddenRequest req, VaultRoot vault, FileBrowser browse
     return Results.NoContent();
 })).LogsActivity("hide");
 
-files.MapGet("/properties", (string path, FileBrowser browser) => Guard(() => Results.Ok(browser.Properties(path))));
+files.MapGet("/properties", (string path, string? drive, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => Results.Ok(drives.Resolve(drive, user).Browser.Properties(path))));
 
-files.MapGet("/checksum", async (string path, FileBrowser browser, CancellationToken ct) =>
+files.MapGet("/checksum", async (string path, string? drive, ClaimsPrincipal user, Drives drives, CancellationToken ct) =>
 {
     string full;
-    try { full = browser.GetFile(path); }
+    try { full = drives.Resolve(drive, user).Browser.GetFile(path); }
+    catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
     catch (Exception e) when (e is VaultPathException or FileNotFoundException) { return Results.Problem(e.Message, statusCode: 404); }
+    catch (SpecialFileException e) { return Results.Problem(e.Message, statusCode: 409); }
     await using var fs = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, FileOptions.SequentialScan);
     var hash = await System.Security.Cryptography.SHA256.HashDataAsync(fs, ct);
     return Results.Ok(new { sha256 = Convert.ToHexStringLower(hash) });
 });
 
-files.MapPost("/compress", (CompressRequest req, Archives archives, VaultRoot vault) => Guard(() =>
+files.MapPost("/compress", (CompressRequest req, ClaimsPrincipal user, Drives drives) => Guard(() =>
 {
-    if (demo.Enabled && DemoOptions.FolderBytes(vault.FullPath) >= demo.MaxTotalBytes)
+    var d = drives.Resolve(req.Drive, user);
+    if (demo.Enabled && DemoOptions.FolderBytes(d.Root.FullPath) >= demo.MaxTotalBytes)
         throw new IOException("Demo storage is full.");
-    return Results.Ok(new { path = archives.Compress(req.Paths, req.Name) });
+    return Results.Ok(new { path = d.Archives.Compress(req.Paths, req.Name) });
 })).RequiresPlugin("archive").LogsActivity("compress");
 
-files.MapPost("/extract", (ExtractRequest req, Archives archives, VaultRoot vault) => Guard(() =>
+files.MapPost("/extract", (ExtractRequest req, ClaimsPrincipal user, Drives drives) => Guard(() =>
 {
-    var free = demo.Enabled ? Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(vault.FullPath)) : new DriveInfo(vault.FullPath).AvailableFreeSpace;
-    return Results.Ok(new { path = archives.Extract(req.Path, free) });
+    var d = drives.Resolve(req.Drive, user);
+    var free = demo.Enabled ? Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(d.Root.FullPath)) : new DriveInfo(d.Root.FullPath).AvailableFreeSpace;
+    return Results.Ok(new { path = d.Archives.Extract(req.Path, free) });
 })).RequiresPlugin("archive").LogsActivity("extract");
 
-files.MapGet("/zip-list", (string path, Archives archives) =>
-    Guard(() => Results.Ok(archives.List(path).Select(e => new { name = e.Name, size = e.Size })))).RequiresPlugin("archive");
+files.MapGet("/zip-list", (string path, string? drive, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => Results.Ok(drives.Resolve(drive, user).Archives.List(path).Select(e => new { name = e.Name, size = e.Size })))).RequiresPlugin("archive");
 
 // several items or a folder as one ZIP download, built while it is sent (nothing is stored)
-files.MapGet("/archive", async (string[] paths, string? name, HttpContext ctx, Archives archives, VaultRoot vault) =>
+files.MapGet("/archive", async (string[] paths, string? name, string? drive, HttpContext ctx, Drives drives) =>
 {
-    try { foreach (var p in paths) _ = vault.Resolve(p); }
+    Archives archives;
+    try
+    {
+        var d = drives.Resolve(drive, ctx.User);
+        archives = d.Archives;
+        foreach (var p in paths) _ = d.Root.Resolve(p);
+    }
+    catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
     catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: 400); }
     var file = (string.IsNullOrWhiteSpace(name) ? paths.Length == 1 ? Path.GetFileName(paths[0]) : "DiskHaven" : name) + ".zip";
     ctx.Response.ContentType = "application/zip";
@@ -308,15 +329,20 @@ app.MapGet("/api/storage", (VaultRoot vault) =>
 
 // ---- recycle bin ------------------------------------------------------------------------
 var trash = app.MapGroup("/api/trash").RequireAuthorization().AddEndpointFilter(Telemetry.CountFileOperation);
-trash.MapGet("/", (FileOperations ops) => Results.Ok(ops.ListTrash()));
-trash.MapPost("/{id}/restore", (string id, FileOperations ops) => Guard(() => Results.Ok(new { path = ops.Restore(id) }))).LogsActivity("restore");
-trash.MapDelete("/{id}", (string id, FileOperations ops) => Guard(() => { ops.Purge(id); return Results.NoContent(); })).LogsActivity("purge");
-trash.MapDelete("/", (FileOperations ops) =>
+trash.MapGet("/", (string? drive, ClaimsPrincipal user, Drives drives) => Guard(() => Results.Ok(drives.Resolve(drive, user).Ops.ListTrash())));
+trash.MapPost("/{id}/restore", (string id, string? drive, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => Results.Ok(new { path = drives.Resolve(drive, user).Ops.Restore(id) }))).LogsActivity("restore");
+trash.MapDelete("/{id}", (string id, string? drive, ClaimsPrincipal user, Drives drives) =>
+    Guard(() => { drives.Resolve(drive, user).Ops.Purge(id); return Results.NoContent(); })).LogsActivity("purge");
+trash.MapDelete("/", (string? drive, ClaimsPrincipal user, Drives drives) => Guard(() =>
 {
+    var d = drives.Resolve(drive, user);
+    d.Root.EnsureWritable();
+    var ops = d.Ops;
     foreach (var item in ops.ListTrash())
         ops.Purge(item.Id);
     return Results.NoContent();
-});
+}));
 
 // ---- share links ------------------------------------------------------------------------
 // the owner's view of a link: everything but the password hash
@@ -483,23 +509,22 @@ usersApi.MapPost("/{name}/password", (string name, ResetPasswordRequest req, Acc
 // ---- disks and sync (admin) -----------------------------------------------------------
 var disksApi = app.MapGroup("/api/disks").RequireAuthorization("admin").RequiresPlugin("disks");
 
-disksApi.MapGet("/", async (DiskAgentClient agent, DiskService disks, SyncJobRunner runner, CancellationToken ct) =>
-    demo.Enabled ? Results.Ok(new { agent = false, demo = true, disks = Array.Empty<DiskView>(), job = (SyncJob?)null }) :
+disksApi.MapGet("/", async (DiskAgentClient agent, DiskService disks, CancellationToken ct) =>
+    demo.Enabled ? Results.Ok(new { agent = false, demo = true, disks = Array.Empty<DiskView>() }) :
     !agent.Available
-        ? Results.Ok(new { agent = false, disks = Array.Empty<DiskView>(), job = runner.Current })
-        : await GuardAsync(async () => Results.Ok(new { agent = true, disks = await disks.ListAsync(ct), job = runner.Current })));
+        ? Results.Ok(new { agent = false, disks = Array.Empty<DiskView>() })
+        : await GuardAsync(async () => Results.Ok(new { agent = true, disks = await disks.ListAsync(ct) })));
 
 disksApi.MapPost("/{id}/mount", (string id, DiskService disks, CancellationToken ct) =>
     GuardAsync(async () => { await disks.EnsureMountedAsync(id, ct); return Results.NoContent(); }));
-disksApi.MapPost("/{id}/unmount", (string id, DiskAgentClient agent, CancellationToken ct) =>
-    GuardAsync(async () => { await agent.UnmountAsync(id, ct); return Results.NoContent(); }));
-disksApi.MapPost("/{id}/standby", (string id, DiskAgentClient agent, CancellationToken ct) =>
-    GuardAsync(async () => { await agent.UnmountAsync(id, ct); await agent.StandbyAsync(id, ct); return Results.NoContent(); }));
-disksApi.MapPost("/{id}/power-off", (string id, DiskAgentClient agent, SyncJobRunner runner, CancellationToken ct) =>
+disksApi.MapPost("/{id}/unmount", (string id, DiskAgentClient agent, ActiveJobs active, CancellationToken ct) =>
+    GuardAsync(async () => { EnsureIdle(id, active); await agent.UnmountAsync(id, ct); return Results.NoContent(); }));
+disksApi.MapPost("/{id}/standby", (string id, DiskAgentClient agent, ActiveJobs active, CancellationToken ct) =>
+    GuardAsync(async () => { EnsureIdle(id, active); await agent.UnmountAsync(id, ct); await agent.StandbyAsync(id, ct); return Results.NoContent(); }));
+disksApi.MapPost("/{id}/power-off", (string id, DiskAgentClient agent, ActiveJobs active, CancellationToken ct) =>
     GuardAsync(async () =>
     {
-        if (runner.Current is { Status: JobStatus.Running } j && j.FsId == id)
-            throw new VaultConflictException("A sync is already running.");
+        EnsureIdle(id, active);
         await agent.PowerOffAsync(id, ct);
         return Results.NoContent();
     }));
@@ -515,26 +540,104 @@ disksApi.MapPut("/{id}", (string id, DiskSettingsRequest req, DiskService disks)
     Guard(() => Results.Ok(disks.UpdateSettings(id, req.Name, req.Folders, req.Schedule, req.After))));
 disksApi.MapGet("/{id}/history", (string id, DiskSettingsStore store) => Results.Ok(store.History(id)));
 
-disksApi.MapPost("/{id}/plan", (string id, DiskService disks, DiskSettingsStore store, VaultRoot vault, CancellationToken ct) =>
-    GuardAsync(async () =>
-    {
-        var s = store.Get(id) ?? throw new VaultConflictException("Disk is not adopted.");
-        var root = await disks.EnsureMountedAsync(id, ct);
-        var plan = await Task.Run(() => SyncPlanner.Plan(vault.FullPath, s.Folders, root, ct), ct);
-        var drive = new DriveInfo(root);
-        return Results.Ok(new
-        {
-            summary = SyncJobRunner.Summarize(plan),
-            free = drive.AvailableFreeSpace,
-            total = drive.TotalSize,
-            actions = plan.Actions.Where(a => a.Kind != SyncActionKind.CreateFolder).Take(200),
-            skipped = plan.Skipped.Take(50),
-        });
-    }));
-disksApi.MapPost("/{id}/sync", (string id, SyncJobRunner runner) => Guard(() => Results.Ok(runner.Start(id))));
+// ---- backup jobs (admin): one-way mirrors in every direction, many per disk ---------------
+var backupsApi = app.MapGroup("/api/backups").RequireAuthorization("admin").RequiresPlugin("disks");
 
-app.MapGet("/api/sync/job", (SyncJobRunner runner) => Results.Ok(runner.Current)).RequireAuthorization("admin").RequiresPlugin("disks");
-app.MapPost("/api/sync/job/cancel", (SyncJobRunner runner) => { runner.Cancel(); return Results.NoContent(); }).RequireAuthorization("admin").RequiresPlugin("disks");
+backupsApi.MapGet("/", (BackupStore store, BackupJobRunner runner) =>
+    Results.Ok(new { jobs = store.All(), job = runner.Current }));
+
+backupsApi.MapPost("/", (BackupJobRequest req, BackupStore store, VaultRoot vault) => Guard(() =>
+{
+    var job = NewJob(req, vault);
+    if (store.All().Any(j => j.Id != job.Id && j.SameTarget(job)))
+        throw new VaultConflictException("Başka bir yedek işi aynı hedef klasörü kullanıyor. Bir klasör yalnızca bir yedeğe ait olabilir.");
+    store.Save(job);
+    return Results.Ok(job);
+}));
+
+backupsApi.MapPut("/{id}", (string id, BackupJobRequest req, BackupStore store, BackupJobRunner runner, VaultRoot vault) => Guard(() =>
+{
+    var old = store.Get(id) ?? throw new KeyNotFoundException("Yedek işi bulunamadı.");
+    if (runner.Current is { Status: BackupRunStatus.Running } r && r.JobId == id)
+        throw new VaultConflictException("Bu yedek şu an çalışıyor; önce durdur ya da bitmesini bekle.");
+    var job = NewJob(req, vault) with
+    {
+        Id = id, CreatedAt = old.CreatedAt, LastRun = old.LastRun, LastSuccessAt = old.LastSuccessAt, Legacy = old.Legacy,
+    };
+    if (store.All().Any(j => j.Id != id && j.SameTarget(job)))
+        throw new VaultConflictException("Başka bir yedek işi aynı hedef klasörü kullanıyor. Bir klasör yalnızca bir yedeğe ait olabilir.");
+    store.Save(job);
+    return Results.Ok(job);
+}));
+
+backupsApi.MapDelete("/{id}", (string id, BackupStore store, BackupJobRunner runner) => Guard(() =>
+{
+    if (runner.Current is { Status: BackupRunStatus.Running } r && r.JobId == id)
+        throw new VaultConflictException("Bu yedek şu an çalışıyor; önce durdur ya da bitmesini bekle.");
+    store.Remove(id);
+    return Results.NoContent();
+}));
+
+backupsApi.MapPost("/{id}/run", (string id, BackupRunRequest? req, BackupJobRunner runner) =>
+    Guard(() => Results.Ok(runner.Start(id, req?.ApproveDeletes ?? false))));
+
+backupsApi.MapGet("/job", (BackupJobRunner runner) => Results.Ok(runner.Current));
+backupsApi.MapPost("/job/cancel", (BackupJobRunner runner) => { runner.Cancel(); return Results.NoContent(); });
+backupsApi.MapGet("/{id}/history", (string id, BackupStore store) => Results.Ok(store.History(id)));
+
+// ---- drives: the main storage plus every registered disk, like "This PC" ------------------
+app.MapGet("/api/drives", async (ClaimsPrincipal user, VaultRoot vault, DiskService disks, DiskAgentClient agent, PluginStore plugins,
+    CancellationToken ct) =>
+{
+    var drive = new DriveInfo(vault.FullPath);
+    var list = new List<object>
+    {
+        new { id = "", name = "", kind = "main", state = "mounted", readOnly = false, system = false,
+              total = demo.Enabled ? demo.MaxTotalBytes : drive.TotalSize,
+              free = demo.Enabled ? Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(vault.FullPath)) : drive.AvailableFreeSpace },
+    };
+    if (user.IsInRole("admin") && plugins.IsInstalled("disks") && !demo.Enabled && agent.Available)
+    {
+        try
+        {
+            foreach (var d in await disks.ListAsync(ct))
+                list.Add(new { id = d.Id, name = d.Name, kind = d.Kind, state = d.State, readOnly = d.ReadOnly || d.MountedReadOnly == true,
+                    system = d.System, systemMount = d.SystemMount, total = d.Usage?.Total ?? d.Size, free = d.Usage?.Free, fsType = d.FsType });
+        }
+        catch (DiskAgentException) { /* agent down: the main storage still works */ }
+    }
+    return Results.Ok(list);
+}).RequireAuthorization();
+
+// opening a disk drive mounts it in its own mode (read-only unless set otherwise)
+app.MapPost("/api/drives/{id}/open", (string id, DiskService disks, CancellationToken ct) =>
+    GuardAsync(async () => { await disks.EnsureMountedAsync(id, ct); return Results.NoContent(); }))
+    .RequireAuthorization("admin").RequiresPlugin("disks");
+
+disksApi.MapPut("/{id}/read-only", (string id, ReadOnlyRequest req, DiskService disks, ActiveJobs active,
+    CancellationToken ct) => GuardAsync(async () =>
+    {
+        EnsureIdle(id, active);
+        return Results.Ok(await disks.SetReadOnlyAsync(id, req.ReadOnly, ct));
+    }));
+
+// copy / move between drives (or inside one): verified, in the background
+var transfersApi = app.MapGroup("/api/transfers").RequireAuthorization();
+transfersApi.MapPost("/", (DriveTransferRequest req, ClaimsPrincipal user, TransferJobRunner runner) =>
+    Guard(() => Results.Ok(runner.Start(req.FromDrive, req.Paths, req.ToDrive, req.Destination, req.Move, user))));
+// a job is visible to, and can be stopped by, the person who started it and admins only
+static bool MayUse(ClaimsPrincipal user, TransferJob? job) =>
+    job is not null && (user.IsInRole("admin") || job.User == user.Identity?.Name);
+transfersApi.MapGet("/job", (ClaimsPrincipal user, TransferJobRunner runner) =>
+    // "null" as JSON when there is nothing to show (a null result would send an empty body the client cannot parse)
+    runner.Current is { } j && MayUse(user, j) ? Results.Ok(j) : Results.Text("null", "application/json"));
+transfersApi.MapPost("/job/cancel", (ClaimsPrincipal user, TransferJobRunner runner) =>
+{
+    if (!MayUse(user, runner.Current))
+        return Results.Problem("Only the person who started the transfer or an admin can stop it.", statusCode: StatusCodes.Status403Forbidden);
+    runner.Cancel();
+    return Results.NoContent();
+});
 
 // ---- plugins, quick access, admin panel ---------------------------------------------------
 var startedAt = DateTimeOffset.UtcNow;
@@ -616,11 +719,21 @@ app.MapTus("/api/tus", _ => Task.FromResult(new DefaultTusConfiguration
     },
 })).RequireAuthorization();
 
-app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, UploadCommitter committer, PluginStore plugins,
-    VersionStore versions, FileOperations ops, CancellationToken ct) =>
+app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, ClaimsPrincipal user, Drives drives, PluginStore plugins,
+    VersionStore versions, CancellationToken ct) =>
 {
     if (id.Length != 32 || !id.All(char.IsAsciiHexDigitLower))
         return Results.Problem("Invalid upload id.", statusCode: 400);
+    DriveContext target;
+    try
+    {
+        target = drives.Resolve(req.Drive, user);
+        target.Root.EnsureWritable();
+    }
+    catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
+    catch (VaultReadOnlyException e) { return Results.Problem(e.Message, statusCode: 409); }
+    var committer = target.Committer;
+    var ops = target.Ops;
     var length = await tusStore.GetUploadLengthAsync(id, ct);
     var offset = await tusStore.GetUploadOffsetAsync(id, ct);
     if (length is null || offset != length)
@@ -631,8 +744,9 @@ app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, Upl
     {
         // "replace": the old file is never just overwritten. With the versions plugin it joins the file's
         // version history, otherwise it goes to the recycle bin.
+        // (previous versions are kept for the main storage only; on a disk the old file goes to that disk's recycle bin)
         Action<string>? replace = !req.Replace ? null
-            : plugins.IsInstalled("versions") ? old => versions.Keep(old) : old => ops.Delete([old]);
+            : target.IsMain && plugins.IsInstalled("versions") ? old => versions.Keep(old) : old => ops.Delete([old]);
         var result = await committer.CommitAsync(Path.Combine(uploadDir, id), req.Destination, req.RelativeName,
             req.Sha256, req.LastModified is { } ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null, ct, replace);
         await tusStore.DeleteFileAsync(id, ct); // removes tus side files; the data file was moved
@@ -648,6 +762,8 @@ app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, Upl
     }
     catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: 400); }
     catch (DirectoryNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
+    catch (VaultReadOnlyException e) { return Results.Problem(e.Message, statusCode: 409); }
+    catch (IOException e) { return Results.Problem(e.Message, statusCode: 409); }   // e.g. no space on the disk; the upload stays and can be committed again
 }).RequireAuthorization().LogsActivity("upload");
 
 // single-page app: unknown non-API paths serve index.html
@@ -701,6 +817,11 @@ static Task SignIn(HttpContext ctx, Account account) =>
 static async Task<IResult> GuardAsync(Func<Task<IResult>> action)
 {
     try { return await action(); }
+    catch (UnauthorizedAccessException) { return NoPermission(); }
+    catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
+    catch (VaultReadOnlyException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
+    catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+    { return Results.Problem(e.Message, statusCode: StatusCodes.Status404NotFound); }
     catch (DiskAgentException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
     catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status400BadRequest); }
     catch (VaultConflictException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
@@ -708,9 +829,44 @@ static async Task<IResult> GuardAsync(Func<Task<IResult>> action)
     catch (IOException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
 }
 
+// the filesystem refused (e.g. a folder on an ext4 disk owned by another user): never a 500
+static IResult NoPermission() => Results.Problem("DiskHaven has no permission for this item on the disk.", statusCode: StatusCodes.Status403Forbidden);
+
+// a disk that a running backup or transfer reads or writes is not unmounted or switched under it
+static void EnsureIdle(string id, ActiveJobs active)
+{
+    if (active.BusyWith(id) is { } what)
+        throw new VaultConflictException($"Bu disk şu an kullanılıyor ({what}); iş bitmeden değiştirilemez.");
+}
+
+// turns the request into a job and refuses what can be known now (source folders, same target, time)
+static BackupJob NewJob(BackupJobRequest req, VaultRoot vault)
+{
+    var sourceDrive = Drives.IsMainId(req.SourceDrive) ? Drives.MainId : req.SourceDrive!;
+    if (string.IsNullOrWhiteSpace(req.TargetDrive) || Drives.IsMainId(req.TargetDrive))
+        throw new VaultPathException("Hedef olarak bir disk seç.");
+    var folders = SyncPlanner.NormalizeFolders(req.SourceFolders ?? []);
+    if (folders.Count == 0)
+        throw new VaultPathException("Yedeklenecek en az bir klasör seç.");
+    if (sourceDrive.Length == 0)
+        foreach (var f in folders)
+            if (!Directory.Exists(vault.Resolve(f)))
+                throw new VaultPathException($"Klasör kaynakta yok: {f}");
+    var job = new BackupJob(Guid.NewGuid().ToString("N"), req.Name?.Trim() ?? "", sourceDrive, folders,
+        req.TargetDrive, VaultRoot.Normalize(req.TargetFolder), req.Enabled,
+        string.IsNullOrWhiteSpace(req.Time) ? "03:00" : req.Time.Trim(),
+        Math.Clamp(req.DeleteThresholdPercent ?? 50, 0, 100), DateTimeOffset.UtcNow,
+        AdoptExisting: req.AdoptExisting);
+    BackupJobRunner.Validate(job);
+    return job;
+}
+
 static IResult Guard(Func<IResult> action)
 {
     try { return action(); }
+    catch (UnauthorizedAccessException) { return NoPermission(); }
+    catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
+    catch (VaultReadOnlyException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
     catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status400BadRequest); }
     catch (VaultConflictException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
     catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
@@ -724,23 +880,28 @@ static IResult Guard(Func<IResult> action)
 record SetupRequest(string Token, string UserName, string Password);
 record LoginRequest(string UserName, string Password);
 record PasswordRequest(string CurrentPassword, string NewPassword);
-record FolderRequest(string? Parent, string Name);
-record RenameRequest(string Path, string NewName);
-record TransferRequest(string[] Paths, string? Destination);
-record DeleteRequest(string[] Paths);
-record HiddenRequest(string[] Paths, bool Hidden);
-record CompressRequest(string[] Paths, string? Name);
-record ExtractRequest(string Path);
+record FolderRequest(string? Parent, string Name, string? Drive = null);
+record RenameRequest(string Path, string NewName, string? Drive = null);
+record TransferRequest(string[] Paths, string? Destination, string? Drive = null);
+record DeleteRequest(string[] Paths, string? Drive = null);
+record HiddenRequest(string[] Paths, bool Hidden, string? Drive = null);
+record CompressRequest(string[] Paths, string? Name, string? Drive = null);
+record ExtractRequest(string Path, string? Drive = null);
 record QuickRequest(string Path, bool On = true);
 record PluginToggle(bool Installed);
 record AdoptRequest(string Name);
 record DiskSettingsRequest(string? Name, string[]? Folders, SyncSchedule? Schedule, AfterSync? After);
+record BackupJobRequest(string Name, string? SourceDrive, string[] SourceFolders, string? TargetDrive, string? TargetFolder,
+    bool Enabled, string? Time, int? DeleteThresholdPercent, bool AdoptExisting);
+record BackupRunRequest(bool ApproveDeletes);
 record ShareRequest(string Path, int? Days, ShareMode? Mode = null, string? Password = null);
 record UnlockRequest(string? Password);
 sealed class SharePasswordException() : Exception("This link is protected with a password.");
 record NewUserRequest(string UserName, string Password, bool IsAdmin);
 record ResetPasswordRequest(string NewPassword);
-record CommitRequest(string? Destination, string RelativeName, string Sha256, long? LastModified, bool Replace = false);
+record CommitRequest(string? Destination, string RelativeName, string Sha256, long? LastModified, bool Replace = false, string? Drive = null);
+record DriveTransferRequest(string? FromDrive, string[] Paths, string? ToDrive, string? Destination, bool Move);
+record ReadOnlyRequest(bool ReadOnly);
 record VersionRequest(string Path, string Id);
 
 public partial class Program;

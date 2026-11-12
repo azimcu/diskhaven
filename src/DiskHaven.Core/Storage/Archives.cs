@@ -14,6 +14,7 @@ public sealed class Archives(VaultRoot root, IVaultChangeListener? listener = nu
     /// <summary>Creates "&lt;name&gt;.zip" in the folder of the first item. Returns its relative path.</summary>
     public string Compress(IReadOnlyList<string> paths, string? zipName = null, CancellationToken ct = default)
     {
+        root.EnsureWritable();
         if (paths.Count == 0)
             throw new VaultPathException("Nothing to compress.");
         var fulls = paths.Select(p => Existing(p)).ToList();
@@ -42,6 +43,11 @@ public sealed class Archives(VaultRoot root, IVaultChangeListener? listener = nu
             }
             File.Move(tmp, target);
         }
+        catch (ArgumentException e) when (FileSystemLimits.IsFileTooLarge(e))
+        {
+            // a ZIP larger than FAT32 allows has no special message from .NET; say what happened
+            throw new IOException(FileSystemLimits.TooLargeMessage, e);
+        }
         finally { if (File.Exists(tmp)) File.Delete(tmp); }
         listener?.Added(target);
         return root.ToRelative(target);
@@ -61,6 +67,7 @@ public sealed class Archives(VaultRoot root, IVaultChangeListener? listener = nu
     /// <summary>Extracts a ZIP into a new folder named after it, next to it. Returns the folder's relative path.</summary>
     public string Extract(string zipPath, long freeBytes, CancellationToken ct = default)
     {
+        root.EnsureWritable();
         var full = Existing(zipPath);
         if (!File.Exists(full))
             throw new FileNotFoundException("File not found.");
@@ -77,6 +84,8 @@ public sealed class Archives(VaultRoot root, IVaultChangeListener? listener = nu
                 if (total > freeBytes)
                     throw new IOException("Not enough free space to extract this archive.");
                 Directory.CreateDirectory(staging);
+                // every entry is written under the staging folder, so one file system check is enough
+                var stagingFileSystem = FileSystemLimits.Detect(staging);
                 var stagingRoot = Path.GetFullPath(staging) + Path.DirectorySeparatorChar;
                 foreach (var entry in zip.Entries)
                 {
@@ -94,6 +103,7 @@ public sealed class Archives(VaultRoot root, IVaultChangeListener? listener = nu
                         Directory.CreateDirectory(dest);
                         continue;
                     }
+                    FileSystemLimits.EnsureFileFits(stagingFileSystem, entry.Length);
                     Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                     using (var src = entry.Open())
                     using (var outFile = new FileStream(dest, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16))
@@ -139,6 +149,7 @@ public sealed class Archives(VaultRoot root, IVaultChangeListener? listener = nu
         if (ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".heic" or ".mp4" or ".mkv" or ".mov" or ".mp3" or ".m4a"
             or ".zip" or ".7z" or ".rar" or ".gz" or ".xz" or ".docx" or ".xlsx" or ".pptx" or ".pdf")
             level = CompressionLevel.NoCompression;
+        SpecialFiles.EnsureNotSpecial(full);
         var entry = zip.CreateEntry(name, level);
         entry.LastWriteTime = File.GetLastWriteTime(full);
         using var dst = entry.Open();
@@ -151,7 +162,7 @@ public sealed class Archives(VaultRoot root, IVaultChangeListener? listener = nu
         var any = false;
         foreach (var info in new DirectoryInfo(dir).EnumerateFileSystemInfos())
         {
-            if (info.LinkTarget is not null)
+            if (info.LinkTarget is not null || (info is FileInfo && SpecialFiles.IsSpecial(info.FullName)))
                 continue;
             any = true;
             if (info is FileInfo f) AddFile(zip, f.FullName, $"{prefix}/{f.Name}", ct, level);

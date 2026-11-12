@@ -89,6 +89,10 @@ public static class ActivityEndpoints
                     detail = null;
                 }
                 if (node["NewName"] is JsonValue nn && nn.TryGetValue<string>(out var newName)) detail = "→ " + newName;
+                // a change on a disk drive (not the main storage) says which disk
+                if (node["Drive"] is JsonValue dv && dv.TryGetValue<string>(out var drive) && drive.Length > 0 && drive != "main")
+                    for (var i = 0; i < paths.Count; i++)
+                        paths[i] = $"[{drive}] {paths[i]}";
             }
             http.RequestServices.GetRequiredService<ActivityLog>().Add(new ActivityLog.Item(
                 DateTimeOffset.UtcNow, http.User.Identity?.Name ?? "?", action, paths.ToArray(), detail,

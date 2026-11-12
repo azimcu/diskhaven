@@ -1,4 +1,4 @@
-import type { ActivityItem, AdminOverview, AfterSync, AuthState, Disk, FileEntry, FileVersion, HideawayState, ItemProperties, Listing, PluginInfo, SystemSample, PublicItem, Share, ShareMode, SyncJob, SyncPlanResult, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
+import type { ActivityItem, AdminOverview, AfterSync, AuthState, Disk, DriveInfo, FileEntry, TransferJob, FileVersion, HideawayState, ItemProperties, Listing, PluginInfo, SystemSample, PublicItem, Share, ShareMode, BackupJob, BackupBody, BackupRun, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
 import { translateServerMessage } from './strings'
 
 export class ApiError extends Error {
@@ -36,6 +36,9 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 }
 
 const q = (path: string) => encodeURIComponent(path)
+/** "&drive=<id>" for a disk; nothing for the main storage, so main-storage calls are exactly as before */
+const dq = (drive?: string) => (drive ? `&drive=${encodeURIComponent(drive)}` : '')
+const db = (drive?: string) => (drive ? { drive } : {})
 
 export const api = {
   authState: () => request<AuthState>('GET', '/api/auth/state'),
@@ -46,29 +49,38 @@ export const api = {
   changePassword: (currentPassword: string, newPassword: string) =>
     request<void>('POST', '/api/auth/password', { currentPassword, newPassword }),
 
-  list: (path: string) => request<Listing>('GET', `/api/files?path=${q(path)}`),
-  search: (path: string, query: string) =>
-    request<Listing & { truncated: boolean }>('GET', `/api/files/search?path=${q(path)}&q=${q(query)}`),
+  // every file call takes the drive explicitly ("" or undefined = main storage), so nothing can go to the wrong disk
+  list: (path: string, drive?: string) => request<Listing>('GET', `/api/files?path=${q(path)}${dq(drive)}`),
+  search: (path: string, query: string, drive?: string) =>
+    request<Listing & { truncated: boolean }>('GET', `/api/files/search?path=${q(path)}&q=${q(query)}${dq(drive)}`),
   storage: () => request<{ total: number; free: number }>('GET', '/api/storage'),
-  createFolder: (parent: string, name: string) => request<{ path: string }>('POST', '/api/files/folder', { parent, name }),
-  rename: (path: string, newName: string) => request<{ path: string }>('POST', '/api/files/rename', { path, newName }),
-  move: (paths: string[], destination: string) => request<{ paths: string[] }>('POST', '/api/files/move', { paths, destination }),
-  copy: (paths: string[], destination: string) => request<{ paths: string[] }>('POST', '/api/files/copy', { paths, destination }),
-  remove: (paths: string[]) => request<{ items: TrashItem[] }>('POST', '/api/files/delete', { paths }),
+  createFolder: (parent: string, name: string, drive?: string) => request<{ path: string }>('POST', '/api/files/folder', { parent, name, ...db(drive) }),
+  rename: (path: string, newName: string, drive?: string) => request<{ path: string }>('POST', '/api/files/rename', { path, newName, ...db(drive) }),
+  move: (paths: string[], destination: string, drive?: string) => request<{ paths: string[] }>('POST', '/api/files/move', { paths, destination, ...db(drive) }),
+  copy: (paths: string[], destination: string, drive?: string) => request<{ paths: string[] }>('POST', '/api/files/copy', { paths, destination, ...db(drive) }),
+  remove: (paths: string[], drive?: string) => request<{ items: TrashItem[] }>('POST', '/api/files/delete', { paths, ...db(drive) }),
 
-  trash: () => request<TrashItem[]>('GET', '/api/trash'),
-  restore: (id: string) => request<{ path: string }>('POST', `/api/trash/${id}/restore`),
-  purge: (id: string) => request<void>('DELETE', `/api/trash/${id}`),
-  emptyTrash: () => request<void>('DELETE', '/api/trash'),
+  trash: (drive?: string) => request<TrashItem[]>('GET', `/api/trash?x=1${dq(drive)}`),
+  restore: (id: string, drive?: string) => request<{ path: string }>('POST', `/api/trash/${id}/restore?x=1${dq(drive)}`),
+  purge: (id: string, drive?: string) => request<void>('DELETE', `/api/trash/${id}?x=1${dq(drive)}`),
+  emptyTrash: (drive?: string) => request<void>('DELETE', `/api/trash?x=1${dq(drive)}`),
 
-  commitUpload: (id: string, destination: string, relativeName: string, sha256: string, lastModified: number, replace = false) =>
+  drives: () => request<DriveInfo[]>('GET', '/api/drives'),
+  openDrive: (id: string) => request<void>('POST', `/api/drives/${encodeURIComponent(id)}/open`),
+  setReadOnly: (id: string, readOnly: boolean) => request<Disk>('PUT', `/api/disks/${encodeURIComponent(id)}/read-only`, { readOnly }),
+  startTransfer: (fromDrive: string, paths: string[], toDrive: string, destination: string, move: boolean) =>
+    request<TransferJob>('POST', '/api/transfers', { fromDrive, paths, toDrive, destination, move }),
+  transferJob: () => request<TransferJob | null>('GET', '/api/transfers/job'),
+  cancelTransfer: () => request<void>('POST', '/api/transfers/job/cancel'),
+
+  commitUpload: (id: string, destination: string, relativeName: string, sha256: string, lastModified: number, replace = false, drive?: string) =>
     request<{ path: string; sha256: string; size: number }>('POST', `/api/uploads/${id}/commit`,
-      { destination, relativeName, sha256, lastModified, replace }),
+      { destination, relativeName, sha256, lastModified, replace, ...db(drive) }),
   versions: (path: string) => request<FileVersion[]>('GET', `/api/versions?path=${q(path)}`),
   versionUrl: (path: string, id: string) => `/api/versions/content?path=${q(path)}&id=${encodeURIComponent(id)}`,
   restoreVersion: (path: string, id: string) => request<void>('POST', '/api/versions/restore', { path, id }),
 
-  disks: () => request<{ agent: boolean; demo?: boolean; disks: Disk[]; job: SyncJob | null }>('GET', '/api/disks'),
+  disks: () => request<{ agent: boolean; demo?: boolean; disks: Disk[] }>('GET', '/api/disks'),
   diskAction: (id: string, action: 'mount' | 'unmount' | 'standby' | 'power-off' | 'power-on') =>
     request<void>('POST', `/api/disks/${encodeURIComponent(id)}/${action}`),
   adoptDisk: (id: string, name: string) => request<unknown>('POST', `/api/disks/${encodeURIComponent(id)}/adopt`, { name }),
@@ -76,11 +88,15 @@ export const api = {
   updateDisk: (id: string, patch: { name?: string; folders?: string[]; schedule?: SyncSchedule; after?: AfterSync }) =>
     request<unknown>('PUT', `/api/disks/${encodeURIComponent(id)}`, patch),
   smart: (id: string) => request<SmartInfo>('GET', `/api/disks/${encodeURIComponent(id)}/smart`),
-  planSync: (id: string) => request<SyncPlanResult>('POST', `/api/disks/${encodeURIComponent(id)}/plan`),
-  startSync: (id: string) => request<SyncJob>('POST', `/api/disks/${encodeURIComponent(id)}/sync`),
-  syncJob: () => request<SyncJob | null>('GET', '/api/sync/job'),
-  cancelSync: () => request<void>('POST', '/api/sync/job/cancel'),
-  syncHistory: (id: string) => request<SyncReport[]>('GET', `/api/disks/${encodeURIComponent(id)}/history`),
+  backups: () => request<{ jobs: BackupJob[]; job: BackupRun | null }>('GET', '/api/backups'),
+  createBackup: (body: BackupBody) => request<BackupJob>('POST', '/api/backups', body),
+  updateBackup: (id: string, body: BackupBody) => request<BackupJob>('PUT', `/api/backups/${encodeURIComponent(id)}`, body),
+  deleteBackup: (id: string) => request<void>('DELETE', `/api/backups/${encodeURIComponent(id)}`),
+  runBackup: (id: string, approveDeletes = false) =>
+    request<BackupRun>('POST', `/api/backups/${encodeURIComponent(id)}/run`, { approveDeletes }),
+  backupJob: () => request<BackupRun | null>('GET', '/api/backups/job'),
+  cancelBackup: () => request<void>('POST', '/api/backups/job/cancel'),
+  backupHistory: (id: string) => request<SyncReport[]>('GET', `/api/backups/${encodeURIComponent(id)}/history`),
 
   shares: () => request<Share[]>('GET', '/api/shares'),
   createShare: (path: string, days: number | null, mode: ShareMode = 'View', password: string | null = null) =>
@@ -114,13 +130,13 @@ export const api = {
   resetPassword: (name: string, newPassword: string) =>
     request<void>('POST', `/api/users/${encodeURIComponent(name)}/password`, { newPassword }),
 
-  setHidden: (paths: string[], hidden: boolean) => request<void>('POST', '/api/files/hidden', { paths, hidden }),
-  properties: (path: string) => request<ItemProperties>('GET', `/api/files/properties?path=${q(path)}`),
-  checksum: (path: string) => request<{ sha256: string }>('GET', `/api/files/checksum?path=${q(path)}`),
-  compress: (paths: string[], name?: string) => request<{ path: string }>('POST', '/api/files/compress', { paths, name }),
-  extract: (path: string) => request<{ path: string }>('POST', '/api/files/extract', { path }),
-  archiveUrl: (paths: string[], name?: string) =>
-    `/api/files/archive?${paths.map(p => `paths=${q(p)}`).join('&')}${name ? `&name=${q(name)}` : ''}`,
+  setHidden: (paths: string[], hidden: boolean, drive?: string) => request<void>('POST', '/api/files/hidden', { paths, hidden, ...db(drive) }),
+  properties: (path: string, drive?: string) => request<ItemProperties>('GET', `/api/files/properties?path=${q(path)}${dq(drive)}`),
+  checksum: (path: string, drive?: string) => request<{ sha256: string }>('GET', `/api/files/checksum?path=${q(path)}${dq(drive)}`),
+  compress: (paths: string[], name?: string, drive?: string) => request<{ path: string }>('POST', '/api/files/compress', { paths, name, ...db(drive) }),
+  extract: (path: string, drive?: string) => request<{ path: string }>('POST', '/api/files/extract', { path, ...db(drive) }),
+  archiveUrl: (paths: string[], name?: string, drive?: string) =>
+    `/api/files/archive?${paths.map(p => `paths=${q(p)}`).join('&')}${name ? `&name=${q(name)}` : ''}${dq(drive)}`,
   systemStats: () => request<SystemSample>('GET', '/api/system/stats'),
   plugins: () => request<{ installed: string[]; vaultLabel: string | null }>('GET', '/api/plugins'),
   quick: () => request<{ favorites: string[]; recent: string[] }>('GET', '/api/quick'),
@@ -153,7 +169,7 @@ export const api = {
     archiveUrl: (ids: string[]) => `/api/hideaway/archive?${ids.map(i => `ids=${encodeURIComponent(i)}`).join('&')}`,
   },
 
-  contentUrl: (path: string, download = false) => `/api/files/content?path=${q(path)}${download ? '&download=true' : ''}`,
+  contentUrl: (path: string, download = false, drive?: string) => `/api/files/content?path=${q(path)}${download ? '&download=true' : ''}${dq(drive)}`,
 }
 
 export function folderEntries(entries: FileEntry[]) {

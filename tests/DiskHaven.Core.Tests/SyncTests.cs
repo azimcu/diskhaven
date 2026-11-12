@@ -1,3 +1,4 @@
+using DiskHaven.Core.Storage;
 using DiskHaven.Core.Sync;
 using Microsoft.Extensions.Time.Testing;
 
@@ -31,10 +32,120 @@ public sealed class SyncTests : IDisposable
         return (plan, report);
     }
 
-    private string[] TrashFiles() =>
-        Directory.Exists(Path.Combine(_dst, SyncExecutor.TrashFolder))
-            ? Directory.GetFiles(Path.Combine(_dst, SyncExecutor.TrashFolder), "*", SearchOption.AllDirectories)
-            : [];
+    private IReadOnlyList<TrashItem> Trash() => new FileOperations(new VaultRoot(_dst), _clock).ListTrash();
+
+    [Fact]
+    public async Task A_file_that_became_a_folder_stays_on_the_backup()
+    {
+        Write(_src, "D/X", "eski dosya");
+        await Sync("D");
+        File.Delete(Path.Combine(_src, "D/X"));
+        Write(_src, "D/X/ic.txt", "yeni", T0.AddDays(1));
+
+        var (_, report) = await Sync("D");
+
+        Assert.True(report.Success);
+        Assert.Equal("yeni", File.ReadAllText(Path.Combine(_dst, "D/X/ic.txt")));
+        Assert.Contains(Trash(), t => t.OriginalPath == "D/X");
+        Assert.True(SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken).IsEmpty);
+    }
+
+    [Fact]
+    public async Task A_folder_that_became_a_file_stays_on_the_backup()
+    {
+        Write(_src, "D/X/ic.txt", "eski");
+        await Sync("D");
+        Directory.Delete(Path.Combine(_src, "D/X"), true);
+        Write(_src, "D/X", "yeni dosya", T0.AddDays(1));
+
+        var (_, report) = await Sync("D");
+
+        Assert.True(report.Success);
+        Assert.Equal("yeni dosya", File.ReadAllText(Path.Combine(_dst, "D/X")));
+        Assert.Contains(Trash(), t => t.OriginalPath == "D/X");
+        Assert.True(SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken).IsEmpty);
+    }
+
+    [Fact]
+    public async Task A_deleted_folder_counts_every_file_inside_for_the_approval_limit()
+    {
+        for (var i = 0; i < 10; i++)
+            Write(_src, $"D/k{i}.txt", "k");
+        for (var i = 0; i < 90; i++)
+            Write(_src, $"D/Buyuk/b{i}.txt", "b" + i);
+        await Sync("D");
+        Directory.Delete(Path.Combine(_src, "D/Buyuk"), true);
+
+        var plan = SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken);
+
+        Assert.Equal(90, plan.DeletedFiles);
+        Assert.Equal(100, plan.TargetFiles);
+        Assert.True(plan.NeedsApproval(50));
+    }
+
+    [Fact]
+    public async Task A_folder_replaced_by_a_file_counts_for_the_approval_limit()
+    {
+        Write(_src, "D/k.txt", "k");
+        for (var i = 0; i < 90; i++)
+            Write(_src, $"D/X/b{i}.txt", "b" + i);
+        await Sync("D");
+        Directory.Delete(Path.Combine(_src, "D/X"), true);
+        Write(_src, "D/X", "dosya", T0.AddDays(1));
+
+        Assert.True(SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken).NeedsApproval(50));
+    }
+
+    [Fact]
+    public async Task A_renamed_folder_does_not_ask_for_approval()
+    {
+        for (var i = 0; i < 90; i++)
+            Write(_src, $"D/Eski/b{i}.txt", "b" + i, T0.AddMinutes(i));
+        Write(_src, "D/k.txt", "k");
+        await Sync("D");
+        Directory.Move(Path.Combine(_src, "D/Eski"), Path.Combine(_src, "D/Yeni"));
+
+        var plan = SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, plan.DeletedFiles);
+        Assert.False(plan.NeedsApproval(50));
+    }
+
+    [Fact]
+    public async Task A_lost_disk_stops_the_backup_before_anything_more_is_written()
+    {
+        Write(_src, "D/a.txt", "a");
+        Write(_src, "D/b.txt", "b");
+        Write(_dst, "D/sil.txt", "boyutu farkli");
+        var plan = SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken);
+        var calls = 0;
+
+        var report = await new SyncExecutor(_clock).ExecuteAsync(plan, _src, new VaultRoot(_dst), "", null,
+            TestContext.Current.CancellationToken, () => ++calls >= 2 ? "disk gitti" : null);
+
+        Assert.False(report.Success);
+        Assert.Contains(report.Errors, e => e.Message == "disk gitti");
+        Assert.Equal(1, report.Copied);
+        Assert.False(File.Exists(Path.Combine(_dst, "D/b.txt")));
+        Assert.True(File.Exists(Path.Combine(_dst, "D/sil.txt")));
+    }
+
+    [Fact]
+    public void Backup_store_ignores_ids_that_are_not_plain_names()
+    {
+        var config = Directory.CreateTempSubdirectory("diskhaven-cfg-").FullName;
+        try
+        {
+            var keep = Path.Combine(config, "keep.json");
+            File.WriteAllText(keep, "[]");
+            var store = new BackupStore(Path.Combine(config, "c"));
+            Directory.CreateDirectory(Path.Combine(config, "c", "backup-history"));
+            store.Remove("../..");
+            Assert.True(File.Exists(keep));
+            Assert.Empty(store.History("../.."));
+        }
+        finally { Directory.Delete(config, true); }
+    }
 
     [Fact]
     public async Task First_sync_copies_everything_with_times_and_second_sync_is_empty()
@@ -73,7 +184,7 @@ public sealed class SyncTests : IDisposable
         Assert.Equal(1, report.Deleted);
         Assert.Equal("yeni içerik", File.ReadAllText(Path.Combine(_dst, "D/change.txt")));
         Assert.False(File.Exists(Path.Combine(_dst, "D/remove.txt")));
-        var trashed = TrashFiles().Select(f => Path.GetFileName(f)!).Order().ToArray();
+        var trashed = Trash().Select(i => i.Name).Order().ToArray();
         Assert.Equal(["change.txt", "remove.txt"], trashed);
     }
 
@@ -109,6 +220,22 @@ public sealed class SyncTests : IDisposable
     }
 
     [Fact]
+    public async Task Diskhaven_own_files_are_never_copied_or_deleted()
+    {
+        Write(_src, "D/iyi.txt", "1");
+        Write(_src, "D/.diskhaven-disk.json", "marker");
+        Write(_dst, "D/.diskhaven-backup.json", "baska is");
+        Write(_dst, "D/.diskhaven/trash/eski", "cop");
+        var plan = SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(plan.Actions, a => a.Path.Contains(".diskhaven", StringComparison.OrdinalIgnoreCase));
+        var report = await new SyncExecutor(_clock).ExecuteAsync(plan, _src, _dst, ct: TestContext.Current.CancellationToken);
+        Assert.True(report.Success);
+        Assert.Equal("baska is", File.ReadAllText(Path.Combine(_dst, "D/.diskhaven-backup.json")));
+        Assert.True(File.Exists(Path.Combine(_dst, "D/.diskhaven/trash/eski")));
+        Assert.False(File.Exists(Path.Combine(_dst, "D/.diskhaven-disk.json")));
+    }
+
+    [Fact]
     public async Task Windows_invalid_names_are_skipped_and_reported()
     {
         Write(_src, "D/iyi.txt", "1");
@@ -130,10 +257,10 @@ public sealed class SyncTests : IDisposable
         await Sync("D");
         File.Delete(Path.Combine(_src, "D/a.txt"));
         await Sync("D");
-        Assert.Single(TrashFiles());
+        Assert.Single(Trash());
         _clock.Advance(TimeSpan.FromDays(31));
         await Sync("D");
-        Assert.Empty(TrashFiles());
+        Assert.Empty(Trash());
     }
 
     [Fact]
@@ -197,8 +324,7 @@ public sealed class SyncMoveTests : IDisposable
         Assert.True(report.Success);
         Assert.Equal("bbbbbb", File.ReadAllText(Path.Combine(_dst, "D/Yeni/Alt/b.bin")));
         Assert.False(Directory.Exists(Path.Combine(_dst, "D/Eski")));
-        Assert.Empty(Directory.Exists(Path.Combine(_dst, SyncExecutor.TrashFolder))
-            ? Directory.GetFiles(Path.Combine(_dst, SyncExecutor.TrashFolder), "*", SearchOption.AllDirectories) : []);
+        Assert.Empty(new FileOperations(new VaultRoot(_dst), _clock).ListTrash());
         Assert.True(SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken).IsEmpty);
     }
 
@@ -230,8 +356,8 @@ public sealed class SyncMoveTests : IDisposable
         Assert.Equal(0, report.Moved);
         Assert.Equal("BBBB", File.ReadAllText(Path.Combine(_dst, "D/yeni.txt")));
         Assert.False(File.Exists(Path.Combine(_dst, "D/eski.txt")));
-        var trashed = Directory.GetFiles(Path.Combine(_dst, SyncExecutor.TrashFolder), "*", SearchOption.AllDirectories);
-        Assert.Equal("AAAA", File.ReadAllText(Assert.Single(trashed)));
+        var trashed = Assert.Single(new FileOperations(new VaultRoot(_dst), _clock).ListTrash());
+        Assert.Equal("AAAA", File.ReadAllText(Path.Combine(_dst, VaultRoot.InternalFolderName, "trash", trashed.Id, "item")));
     }
 
     [Fact]

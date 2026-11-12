@@ -580,3 +580,27 @@ details.recent summary::-webkit-details-marker { display: none; }
 .versions li span { flex: 1; display: flex; flex-direction: column; font-size: 13px; }
 .versions li small { color: var(--muted); }
 .versions .btn.small { display: inline-flex; align-items: center; text-decoration: none; color: inherit; }
+
+/* ---- disk drives: read-only, system disks, transfers between drives ---- */
+.ro-strip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text); background: var(--surface-2); }
+.ro-strip .link { margin-left: auto; }
+.drive-badge { display: inline-flex; vertical-align: -1px; margin-left: 5px; color: var(--muted); }
+.system-disks > summary { cursor: pointer; list-style: none; }
+.system-disks > summary::-webkit-details-marker { display: none; }
+.system-disks > summary::before { content: '▸ '; }
+.system-disks[open] > summary::before { content: '▾ '; }
+.ro-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); }
+.ro-row.ro { background: var(--surface); }
+.ro-row.rw { border-color: var(--accent); }
+.disk-card.system { opacity: .9; border-style: dashed; }
+.disk-card.system .disk-state { display: flex; align-items: center; gap: 6px; }
+.section-h { display: flex; align-items: center; gap: 8px; font-size: 15px; margin: 22px 0 4px; }
+.disks-note { margin: 0 0 12px; }
+.disks-note svg { vertical-align: -2px; margin-right: 4px; }
+.transfer-bar { position: fixed; left: 16px; bottom: 40px; z-index: 30; width: 380px; max-width: calc(100% - 32px); margin: 0; box-shadow: var(--shadow); background: var(--surface); }
+.transfer-bar .grow { flex: 1; }
+.transfer-bar header strong { flex: 0 1 auto; }
+@media (max-width: 720px) {
+  .transfer-bar { left: 8px; right: 8px; width: auto; max-width: none; bottom: 36px; }
+}
+.problem-mark { color: var(--danger); font-size: .85em; margin-left: .25em; }
