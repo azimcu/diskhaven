@@ -90,7 +90,7 @@ def host(*cmd, check_rc=False):
 
 
 def disks():
-    return {d["name"]: d for d in call("GET", "/api/disks")[1]["disks"]}
+    return {d["name"]: d for d in call("GET", "/api/disks")[1]["disks"] if d["kind"] == "virtual"}   # only test disks: a real disk may share a name
 
 
 D = disks()
