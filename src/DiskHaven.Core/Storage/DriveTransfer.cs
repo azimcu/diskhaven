@@ -37,8 +37,10 @@ public sealed class DriveTransfer(TimeProvider clock)
 
     public async Task<TransferReport> RunAsync(VaultRoot source, IReadOnlyList<string> paths, VaultRoot destination,
         string? destinationFolder, bool move, IProgress<TransferProgress>? progress = null, CancellationToken ct = default,
-        Func<string?>? drivesPresent = null)
+        Func<string?>? drivesPresent = null, FileOperations? sourceOps = null, IVaultChangeListener? destinationListener = null)
     {
+        // sourceOps: the source drive's own FileOperations, so a move's recycle-bin step keeps folder sizes and
+        // versions of the main storage in step; destinationListener hears about everything written into the destination
         destination.EnsureWritable();
         if (move)
             source.EnsureWritable();
@@ -137,6 +139,10 @@ public sealed class DriveTransfer(TimeProvider clock)
         foreach (var item in items)
         {
             if (ct.IsCancellationRequested) { canceled = true; break; }
+            // before anything is created for this item: a destination that went away since Start leaves an empty
+            // mount-point folder on the system disk, and nothing may be written into it
+            if (Gone(source.ToRelative(item)))
+                break;
             var itemErrors = errors.Count;
             var itemSkipped = skipped.Count;
             var targetTop = Path.Combine(dest, FileNames.Unique(dest, Path.GetFileName(item)));
@@ -226,7 +232,7 @@ public sealed class DriveTransfer(TimeProvider clock)
                 }
                 try
                 {
-                    new FileOperations(source, clock).Delete([source.ToRelative(item)]);
+                    (sourceOps ?? new FileOperations(source, clock)).Delete([source.ToRelative(item)]);
                     trashed++;
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -236,6 +242,13 @@ public sealed class DriveTransfer(TimeProvider clock)
             }
         }
         Report(null);
+        if (destinationListener is not null)
+            foreach (var rel in created)
+            {
+                var full = Path.Combine(destination.FullPath, rel.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(full) || Directory.Exists(full))
+                    destinationListener.Added(full);
+            }
         return new TransferReport(created, copied, bytesDone, trashed, errors, skipped, canceled, renamed);
     }
 

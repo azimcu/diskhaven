@@ -281,6 +281,52 @@ public sealed class SyncTests : IDisposable
     {
         public void Report(SyncProgress value) => on(value);
     }
+    // ---- kod incelemesi bulguları (14.11.2026) ----
+
+    [Fact]
+    public async Task A_backup_leaves_other_jobs_temporary_files_on_the_target_alone()
+    {
+        Write(_src, "D/a.txt", "veri");
+        // an upload or ZIP job on the same disk is using the shared temporary folder right now
+        Write(_dst, ".diskhaven/tmp/upload-123.part", "yarım yükleme");
+        var (_, report) = await Sync("D");
+        Assert.True(report.Success);
+        Assert.True(File.Exists(Path.Combine(_dst, ".diskhaven/tmp/upload-123.part")));
+        Assert.Empty(Directory.EnumerateDirectories(Path.Combine(_dst, ".diskhaven/tmp"), "backup-*"));   // its own run folder is gone
+    }
+
+    [Fact]
+    public void Move_detection_skips_an_unreadable_folder_instead_of_failing_the_plan()
+    {
+        if (Environment.UserName == "root") return;   // root can read everything: nothing to test
+        Write(_src, "D/kalan.txt", "x");
+        Write(_dst, "D/kalan.txt", "x");
+        Write(_dst, "D/Eski/ic/gizli.txt", "y");
+        var locked = Path.Combine(_dst, "D/Eski/ic");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            var plan = SyncPlanner.Plan(_src, ["D"], _dst, TestContext.Current.CancellationToken);
+            Assert.Contains(plan.Actions, a => a.Kind == SyncActionKind.DeleteFolder && a.Path == "D/Eski");
+        }
+        finally { File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); }
+    }
+
+    private static BackupJob Job(string target, string folder, params string[] sources) =>
+        new(Guid.NewGuid().ToString("N"), "j", "", sources, target, folder, true, "03:00", 50, DateTimeOffset.UnixEpoch);
+
+    [Fact]
+    public void Backup_targets_that_overlap_are_refused_not_only_identical_ones()
+    {
+        Assert.True(Job("d1", "Yedek", "Belgeler").SameTarget(Job("d1", "yedek", "Müzik")));            // same folder, other case
+        Assert.True(Job("d1", "", "Docs").SameTarget(Job("d1", "Docs", "Music")));                    // Docs and Docs/Music
+        Assert.True(Job("d1", "A/B", "X").SameTarget(Job("d1", "A", "B")));                          // A/B/X inside A/B
+        Assert.True(Job("d1", "", "Docs").SameTarget(Job("d1", "", "Music")));                         // same target folder: one marker file
+        Assert.False(Job("d1", "Y1", "Docs").SameTarget(Job("d1", "Y2", "Docs")));                     // side by side
+        Assert.False(Job("d1", "Yedek", "Docs").SameTarget(Job("d2", "Yedek", "Docs")));               // other disk
+        Assert.False(Job("d1", "Yedek1", "Docs").SameTarget(Job("d1", "Yedek10", "Docs")));            // prefix of a name is not nesting
+    }
+
 }
 
 public sealed class SyncMoveTests : IDisposable

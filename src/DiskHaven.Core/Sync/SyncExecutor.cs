@@ -40,7 +40,11 @@ public sealed class SyncExecutor(TimeProvider clock)
         target.EnsureWritable();
         targetPrefix = VaultRoot.Normalize(targetPrefix);
         var targetBase = target.Resolve(targetPrefix);
-        var temp = Path.Combine(target.FullPath, TempFolder);
+        // each run has its own subfolder: uploads, ZIP jobs and copies on the same disk share TempFolder,
+        // and the cleanup at the end must only remove this run's files
+        var tempParent = Path.Combine(target.FullPath, TempFolder);
+        CleanStaleRuns(tempParent, clock.GetUtcNow().UtcDateTime);
+        var temp = Path.Combine(tempParent, RunFolderPrefix + Guid.NewGuid().ToString("N"));
         var trash = new FileOperations(target, clock);
         var started = clock.GetUtcNow();
 
@@ -188,6 +192,9 @@ public sealed class SyncExecutor(TimeProvider clock)
 
         Report("cleanup", null);
         TryDelete(temp);
+        try { if (Directory.Exists(tempParent) && !Directory.EnumerateFileSystemEntries(tempParent).Any()) Directory.Delete(tempParent); }
+        catch (IOException) { }               // another job put a file there in the meantime: it stays
+        catch (UnauthorizedAccessException) { }
         if (!lost)
         {
             try { trash.PurgeOlderThan(TrashRetention); }
@@ -270,6 +277,23 @@ public sealed class SyncExecutor(TimeProvider clock)
         prefix.Length == 0 ? rel : $"{prefix}/{rel}";
 
     private static string Combine(string root, string rel) => Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
+
+    private const string RunFolderPrefix = "backup-";
+
+    /// <summary>Removes run folders a crashed or killed backup left behind (older than a day).</summary>
+    private static void CleanStaleRuns(string tempParent, DateTime nowUtc)
+    {
+        try
+        {
+            if (!Directory.Exists(tempParent))
+                return;
+            foreach (var d in new DirectoryInfo(tempParent).EnumerateDirectories(RunFolderPrefix + "*"))
+                if (d.LinkTarget is null && nowUtc - d.LastWriteTimeUtc > TimeSpan.FromDays(1))
+                    TryDelete(d.FullName);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
 
     private static void TryDelete(string dir)
     {

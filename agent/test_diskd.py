@@ -93,6 +93,13 @@ class SafetyTests(unittest.TestCase):
     def test_fstab_label_is_system(self):
         self.assertEqual(self.scan()["lbl-uuid"]["systemReason"], "fstab")
 
+    def test_fstab_escaped_space_in_label_still_counts(self):
+        # fstab writes "Media Disk" as Media\040Disk; by-label links write it as Media\x20Disk
+        write(self.cfg["fstab"], "LABEL=Media\\040Disk /mnt/m ext4 nofail 0 2\n/dev/disk/by-label/Yedek\\x20Disk /mnt/y ext4 nofail 0 2\n")
+        src = self.m.fstab_sources()
+        self.assertIn(("label", "media disk"), src)
+        self.assertIn(("label", "yedek disk"), src)
+
     def test_protected_serial_is_system(self):
         self.assertEqual(self.scan()["prot-uuid"]["systemReason"], "protected")
 

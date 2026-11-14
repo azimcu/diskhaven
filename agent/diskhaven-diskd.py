@@ -91,7 +91,8 @@ def fstab_sources():
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
-        src = line.split()[0]
+        # fstab writes a space as \040 (octal); /dev/disk/by-label/ links write it as \x20
+        src = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), line.split()[0])
         for prefix, key in (("UUID=", "uuid"), ("LABEL=", "label"), ("PARTUUID=", "partuuid")):
             if src.upper().startswith(prefix):
                 found.add((key, src[len(prefix):].strip('"').lower()))
@@ -99,7 +100,7 @@ def fstab_sources():
         else:
             m = re.match(r"^/dev/disk/by-(uuid|label|partuuid)/(.+)$", src)
             if m:
-                found.add((m.group(1), m.group(2).lower()))
+                found.add((m.group(1), re.sub(r"\\x([0-9a-fA-F]{2})", lambda x: chr(int(x.group(1), 16)), m.group(2)).lower()))
             elif src.startswith("/dev/"):
                 found.add(("path", os.path.realpath(src)))
     return found
@@ -235,9 +236,15 @@ def op_list(_):
             save_known(known)
         modes = mount_modes()
         disks = []
+        powers = {}   # one hdparm per physical disk, not per partition; system disks are not asked at all
         for uid, d in live.items():
             state = "system" if d["system"] else "mounted" if d["mountPoint"] else "attached"
-            power = power_state(d["disk"]) if d["kind"] in ("usb", "sata") else "active/idle"
+            if d["kind"] in ("usb", "sata") and not d["system"]:
+                if d["disk"] not in powers:
+                    powers[d["disk"]] = power_state(d["disk"])
+                power = powers[d["disk"]]
+            else:
+                power = "active/idle"
             ro = modes.get(d["mountPoint"]) if d["mountPoint"] else None
             disks.append({**{k: v for k, v in d.items() if k not in ("backingFile",)},
                           "state": state, "power": power, "readOnly": ro})

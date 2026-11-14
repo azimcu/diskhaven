@@ -524,8 +524,8 @@ disksApi.MapGet("/", async (DiskAgentClient agent, DiskService disks, Cancellati
         ? Results.Ok(new { agent = false, disks = Array.Empty<DiskView>() })
         : await GuardAsync(async () => Results.Ok(new { agent = true, disks = await disks.ListAsync(ct) })));
 
-disksApi.MapPost("/{id}/mount", (string id, DiskService disks, CancellationToken ct) =>
-    GuardAsync(async () => { await disks.EnsureMountedAsync(id, ct); return Results.NoContent(); }));
+disksApi.MapPost("/{id}/mount", (string id, DiskService disks, ActiveJobs active, CancellationToken ct) =>
+    GuardAsync(async () => { await OpenDisk(id, disks, active, ct); return Results.NoContent(); }));
 disksApi.MapPost("/{id}/unmount", (string id, DiskAgentClient agent, ActiveJobs active, CancellationToken ct) =>
     GuardAsync(async () => { EnsureIdle(id, active); await agent.UnmountAsync(id, ct); return Results.NoContent(); }));
 disksApi.MapPost("/{id}/standby", (string id, DiskAgentClient agent, ActiveJobs active, CancellationToken ct) =>
@@ -559,7 +559,7 @@ backupsApi.MapPost("/", (BackupJobRequest req, BackupStore store, VaultRoot vaul
 {
     var job = NewJob(req, vault);
     if (store.All().Any(j => j.Id != job.Id && j.SameTarget(job)))
-        throw new VaultConflictException("Başka bir yedek işi aynı hedef klasörü kullanıyor. Bir klasör yalnızca bir yedeğe ait olabilir.");
+        throw new VaultConflictException("Başka bir yedek işi aynı hedef klasöre ya da onun içine/dışına yazıyor. İki yedek birbirinin dosyalarını çöpe atmasın diye hedefler iç içe olamaz.");
     store.Save(job);
     return Results.Ok(job);
 }));
@@ -574,7 +574,7 @@ backupsApi.MapPut("/{id}", (string id, BackupJobRequest req, BackupStore store, 
         Id = id, CreatedAt = old.CreatedAt, LastRun = old.LastRun, LastSuccessAt = old.LastSuccessAt, Legacy = old.Legacy,
     };
     if (store.All().Any(j => j.Id != id && j.SameTarget(job)))
-        throw new VaultConflictException("Başka bir yedek işi aynı hedef klasörü kullanıyor. Bir klasör yalnızca bir yedeğe ait olabilir.");
+        throw new VaultConflictException("Başka bir yedek işi aynı hedef klasöre ya da onun içine/dışına yazıyor. İki yedek birbirinin dosyalarını çöpe atmasın diye hedefler iç içe olamaz.");
     store.Save(job);
     return Results.Ok(job);
 }));
@@ -619,8 +619,8 @@ app.MapGet("/api/drives", async (ClaimsPrincipal user, VaultRoot vault, DiskServ
 }).RequireAuthorization();
 
 // opening a disk drive mounts it in its own mode (read-only unless set otherwise)
-app.MapPost("/api/drives/{id}/open", (string id, DiskService disks, CancellationToken ct) =>
-    GuardAsync(async () => { await disks.EnsureMountedAsync(id, ct); return Results.NoContent(); }))
+app.MapPost("/api/drives/{id}/open", (string id, DiskService disks, ActiveJobs active, CancellationToken ct) =>
+    GuardAsync(async () => { await OpenDisk(id, disks, active, ct); return Results.NoContent(); }))
     .RequireAuthorization("admin").RequiresPlugin("disks");
 
 disksApi.MapPut("/{id}/read-only", (string id, ReadOnlyRequest req, DiskService disks, ActiveJobs active,
@@ -845,6 +845,15 @@ static async Task<IResult> GuardAsync(Func<Task<IResult>> action)
 static IResult NoPermission() => Results.Problem("DiskHaven has no permission for this item on the disk.", statusCode: StatusCodes.Status403Forbidden);
 
 // a disk that a running backup or transfer reads or writes is not unmounted or switched under it
+// a disk a transfer or backup is using stays as it is: mounting it again (when the kernel's mode differs from the
+// setting) would pull the mount out from under the running job
+static async Task OpenDisk(string id, DiskService disks, ActiveJobs active, CancellationToken ct)
+{
+    if (active.BusyWith(id) is not null && disks.MountOf(id) is not null)
+        return;
+    await disks.EnsureMountedAsync(id, ct);
+}
+
 static void EnsureIdle(string id, ActiveJobs active)
 {
     if (active.BusyWith(id) is { } what)

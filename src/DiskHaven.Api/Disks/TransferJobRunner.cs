@@ -14,7 +14,7 @@ public sealed record TransferJob(
 /// for the UI. Everything is checked when the job is started, so a request that would fail fails right away.
 /// </summary>
 public sealed class TransferJobRunner(Drives drives, ActiveJobs active, TimeProvider clock, ILogger<TransferJobRunner> log, ActivityLog activity,
-    PluginStore plugins)
+    PluginStore plugins, IVaultChangeListener mainSizes)
 {
     private readonly Lock _lock = new();
     private TransferJob? _job;
@@ -71,7 +71,7 @@ public sealed class TransferJobRunner(Drives drives, ActiveJobs active, TimeProv
         {
             var progress = new Progress<TransferProgress>(p => Set(j => j with { Progress = p }));
             var report = await new DriveTransfer(clock).RunAsync(from.Root, job.Paths, to.Root, job.Destination, job.Move, progress, ct,
-                () => drives.Missing(from) ?? drives.Missing(to));
+                () => drives.Missing(from) ?? drives.Missing(to), from.Ops, to.IsMain ? mainSizes : null);
             Set(j => j with
             {
                 Status = report.Canceled ? JobStatus.Canceled : report.Success ? JobStatus.Done : JobStatus.Failed,

@@ -155,7 +155,16 @@ public sealed class BackupJobRunner(BackupStore store, DiskService disks, DiskSe
 
             Set(j => j with { Phase = "finish" });
             if (!report.Canceled)
-                await disks.FinishAsync(job.TargetDrive, targetSettings.After, CancellationToken.None);
+            {
+                // the backup itself is finished and recorded: a failing standby / power-off afterwards (internal disk,
+                // someone browsing the disk) must not turn a good backup into a failed one
+                try { await disks.FinishAsync(job.TargetDrive, targetSettings.After, CancellationToken.None); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    log.LogWarning(e, "Backup {Job}: the after-backup step ({After}) failed", job.Name, targetSettings.After);
+                    Set(j => j with { Message = "Yedek tamam. Ardından disk kapatılamadı/uyutulamadı: " + e.Message });
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -263,6 +272,7 @@ public sealed class BackupJobRunner(BackupStore store, DiskService disks, DiskSe
         {
             Set(j => j with { Phase = "copy-hidden" });
             var hiddenRoot = Path.Combine(target.FullPath, ".diskhaven-data");
+            Directory.CreateDirectory(hiddenRoot);   // a new backup disk does not have it yet; the executor needs an existing root
             var hidden = await Task.Run(() => SyncPlanner.Plan(internalDir, ["hideaway"], hiddenRoot, ct), ct);
             var report = await new SyncExecutor(clock).ExecuteAsync(hidden, internalDir, hiddenRoot,
                 new Progress<SyncProgress>(_ => { }), ct);

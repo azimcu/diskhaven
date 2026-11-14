@@ -87,7 +87,10 @@ public static class SyncPlanner
                 var dir = Path.Combine(targetRoot, a.Path.Replace('/', Path.DirectorySeparatorChar));
                 if (!Directory.Exists(dir))
                     continue;
-                foreach (var f in new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.AllDirectories))
+                // unreadable subfolders are skipped (move detection is only an optimisation; the delete itself
+                // reports them), they must not fail the whole plan
+                var walk = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = 0 };
+                foreach (var f in new DirectoryInfo(dir).EnumerateFiles("*", walk))
                     if (f.Length > 0 && f.LinkTarget is null)
                         gone.Add((a.Path + "/" + Path.GetRelativePath(dir, f.FullName).Replace(Path.DirectorySeparatorChar, '/'),
                             f.Length, f.LastWriteTimeUtc, null));

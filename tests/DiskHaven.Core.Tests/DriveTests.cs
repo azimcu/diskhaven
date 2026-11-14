@@ -465,4 +465,33 @@ public sealed class DriveTests : IDisposable
             change();
         }
     }
+
+    [Fact]
+    public async Task A_destination_that_went_away_before_the_first_item_gets_nothing_written()
+    {
+        var before = Directory.EnumerateFileSystemEntries(_b, "*", SearchOption.AllDirectories).ToList();
+        var r = await new DriveTransfer(_clock).RunAsync(new VaultRoot(_a), ["Fotoğraflar"], new VaultRoot(_b), "", false, null, Ct,
+            () => "Hedef disk kayboldu.");
+        Assert.False(r.Success);
+        Assert.Equal(before.Order(), Directory.EnumerateFileSystemEntries(_b, "*", SearchOption.AllDirectories).Where(p => !p.Contains(".diskhaven")).Order());
+    }
+
+    private sealed class Recorder : IVaultChangeListener
+    {
+        public List<string> Added = [], Removed = [];
+        void IVaultChangeListener.Added(string fullPath) => Added.Add(fullPath);
+        void IVaultChangeListener.Removing(string fullPath) => Removed.Add(fullPath);
+    }
+
+    [Fact]
+    public async Task A_move_uses_the_source_drives_own_operations_and_tells_the_destination()
+    {
+        var src = new Recorder(); var dst = new Recorder();
+        var srcRoot = new VaultRoot(_a);
+        var r = await new DriveTransfer(_clock).RunAsync(srcRoot, ["Fotoğraflar"], new VaultRoot(_b), "Hedef", true, null, Ct, null,
+            new FileOperations(srcRoot, _clock, src), dst);
+        Assert.True(r.Success);
+        Assert.Contains(src.Removed, p => p.EndsWith("Fotoğraflar"));       // folder sizes of the source hear about the move
+        Assert.Contains(dst.Added, p => p.EndsWith(Path.Combine("Hedef", "Fotoğraflar")));
+    }
 }
