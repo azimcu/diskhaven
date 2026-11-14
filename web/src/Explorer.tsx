@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
-  FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, Link2, List, MoreVertical, PanelRight, Pencil,
-  Lock, RefreshCw, Rows3, Scissors, Search, Star, StarOff, Trash2, Upload,
+  FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, LayoutList, Link2, List, MoreVertical, PanelRight, Pencil,
+  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload,
 } from 'lucide-react'
+
+const VIEWS = ['icons', 'list', 'details', 'tiles', 'content']
+// Windows Explorer's icon sizes; the slider and Ctrl + wheel still give any size in between
+const ICON_PRESETS = [
+  { size: 256, glyph: 18, label: t.viewIconsXL },
+  { size: 160, glyph: 17, label: t.viewIconsL },
+  { size: 96, glyph: 16, label: t.viewIconsM },
+  { size: 48, glyph: 14, label: t.viewIconsS },
+]
+const viewIcon = (v: string) =>
+  v === 'icons' ? <LayoutGrid size={16} /> : v === 'list' ? <Rows3 size={16} /> : v === 'tiles' ? <SquareStack size={16} />
+    : v === 'content' ? <LayoutList size={16} /> : <List size={16} />
 import { api } from './api'
 import { toast, toastError } from './dialogs'
 import { FileIcon } from './FileIcon'
@@ -58,14 +70,23 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
   const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: 'name', asc: true })
-  // view: details (columns), list (compact names) or icons; icon size comes from the slider (Ctrl + wheel too)
-  const [view, setViewState] = useState(() => { const v = readPref('hv.view', 'details'); return v === 'list' || v === 'icons' ? v : 'details' })
+  // view, like Windows Explorer: icons (four preset sizes or any size from the slider / Ctrl + wheel), list,
+  // details (columns), tiles (icon + name, type, size) and content (one wide row per item)
+  const [view, setViewState] = useState(() => { const v = readPref('hv.view', 'details'); return VIEWS.includes(v) ? v : 'details' })
   const setView = (v: string) => { setViewState(v); writePref('hv.view', v) }
   const [iconSize, setIconSizeState] = useState(() => Math.min(256, Math.max(32, Number(readPref('hv.size', '80')) || 80)))
   const setIconSize = (n: number) => { const v = Math.min(256, Math.max(32, Math.round(n))); setIconSizeState(v); writePref('hv.size', String(v)) }
   const [showHidden, setShowHiddenState] = useState(() => readPref('hv.hidden', '0') === '1')
   const setShowHidden = (v: boolean) => { setShowHiddenState(v); writePref('hv.hidden', v ? '1' : '0') }
-  const [viewMenu, setViewMenu] = useState(false)
+  // the view menu opens fixed under its button: the command bar scrolls sideways and would clip a menu inside it
+  const [viewMenu, setViewMenuPos] = useState<{ top: number; right: number } | null>(null)
+  const closeViewMenu = () => setViewMenuPos(null)
+  const viewBtn = useRef<HTMLButtonElement>(null)
+  const toggleViewMenu = () => {
+    if (viewMenu) return setViewMenuPos(null)
+    const r = viewBtn.current?.getBoundingClientRect()
+    if (r) setViewMenuPos({ top: Math.round(r.bottom + 4), right: Math.max(8, Math.round(window.innerWidth - r.right)) })
+  }
   const basePlugins = usePlugins()
   // sharing, favourites and previous versions belong to the main storage
   const plugins = { ...basePlugins, has: (id: string) => basePlugins.has(id) && (!onDisk || !['sharing', 'quick', 'versions'].includes(id)) }
@@ -397,16 +418,22 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           </label>
         )}
         <div className="view-pick">
-          <button className="cmd" onClick={e => { e.stopPropagation(); setViewMenu(m => !m) }} title={t.viewMode} aria-expanded={viewMenu}>
-            {view === 'icons' ? <LayoutGrid size={16} /> : view === 'list' ? <Rows3 size={16} /> : <List size={16} />} <ChevronDown size={13} />
+          <button ref={viewBtn} className="cmd" onClick={e => { e.stopPropagation(); toggleViewMenu() }} title={t.viewMode} aria-expanded={!!viewMenu} aria-haspopup="menu">
+            {viewIcon(view)} <span className="hide-sm">{t.viewMode}</span> <ChevronDown size={13} />
           </button>
           {viewMenu && (
             <>
-              <div className="menu-backdrop" onMouseDown={() => setViewMenu(false)} />
-              <div className="menu view-menu" role="menu" onClick={() => setViewMenu(false)}>
-                <button className="menu-item" onClick={() => setView('icons')}><span className="menu-ic">{view === 'icons' ? <Check size={15} /> : <LayoutGrid size={16} />}</span>{t.viewGrid}</button>
-                <button className="menu-item" onClick={() => setView('list')}><span className="menu-ic">{view === 'list' ? <Check size={15} /> : <Rows3 size={16} />}</span>{t.viewList}</button>
-                <button className="menu-item" onClick={() => setView('details')}><span className="menu-ic">{view === 'details' ? <Check size={15} /> : <List size={16} />}</span>{t.viewDetails}</button>
+              <div className="menu-backdrop" onMouseDown={closeViewMenu} />
+              <div className="menu view-menu" role="menu" style={{ top: viewMenu.top, right: viewMenu.right }} onClick={closeViewMenu}>
+                {ICON_PRESETS.map(p => {
+                  const on = view === 'icons' && iconSize === p.size
+                  return <button key={p.size} className="menu-item" role="menuitemradio" aria-checked={on} onClick={() => { setIconSize(p.size); setView('icons') }}>
+                    <span className="menu-ic">{on ? <Check size={15} /> : <LayoutGrid size={p.glyph} />}</span>{p.label}</button>
+                })}
+                <div className="menu-sep" />
+                {([['list', t.viewList], ['details', t.viewDetails], ['tiles', t.viewTiles], ['content', t.viewContent]] as const).map(([v, label]) =>
+                  <button key={v} className="menu-item" role="menuitemradio" aria-checked={view === v} onClick={() => setView(v)}>
+                    <span className="menu-ic">{view === v ? <Check size={15} /> : viewIcon(v)}</span>{label}</button>)}
                 <div className="menu-sep" />
                 <div className="menu-slider show-sm-flex"><LayoutGrid size={12} /><input type="range" min={32} max={256} step={4} value={iconSize}
                   onClick={e => e.stopPropagation()} onChange={e => { setIconSize(Number(e.target.value)); if (view !== 'icons') setView('icons') }} aria-label={t.iconSize} /><LayoutGrid size={17} /></div>
@@ -542,6 +569,36 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
                   {renaming === e.path
                     ? <RenameInput entry={e} onDone={v => commitRename(e, v)} onCancel={() => setRenaming(null)} />
                     : <span className="tile-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(view === 'tiles' || view === 'content') && shown.length > 0 && (
+            <div className={view === 'tiles' ? 'tiles-view' : 'content-view'}>
+              {shown.map(e => (
+                <div key={e.path} data-path={e.path} {...(e.kind === 'Folder' ? { 'data-folder': '' } : {})}
+                  className={`card ${selected.has(e.path) ? 'sel' : ''} ${(clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)) || e.hidden ? 'cut' : ''}`}
+                  draggable onDragStart={ev => dragStart(ev, e)}
+                  onDragOver={ev => { if (e.kind === 'Folder') { ev.preventDefault(); ev.currentTarget.classList.add('drop') } }}
+                  onDragLeave={ev => ev.currentTarget.classList.remove('drop')}
+                  onDrop={ev => { ev.currentTarget.classList.remove('drop'); if (e.kind === 'Folder') { ev.stopPropagation(); onDropItems(e.path, ev) } }}
+                  onClick={ev => clickRow(ev, e)} onDoubleClick={() => open(e)} onContextMenu={ev => contextRow(ev, e)}
+                  onTouchStart={ev => touchStart(ev, e)} onTouchEnd={touchEnd} onTouchMove={touchEnd}>
+                  <Thumb entry={e} size={view === 'tiles' ? 48 : 40} />
+                  <div className="card-text">
+                    {renaming === e.path
+                      ? <RenameInput entry={e} onDone={v => commitRename(e, v)} onCancel={() => setRenaming(null)} />
+                      : <span className="card-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}</span>}
+                    <span className="card-meta">{typeName(e)}{results ? ` · ${parentOf(e.path) || rootName}` : ''}</span>
+                    {view === 'tiles' && e.kind === 'File' && <span className="card-meta">{formatSize(e.size)}</span>}
+                  </div>
+                  {view === 'content' && (
+                    <div className="card-side">
+                      <span className="card-meta">{t.colModified}: {formatDate(e.modified)}</span>
+                      {e.kind === 'File' && <span className="card-meta">{t.colSize}: {formatSize(e.size)}</span>}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

@@ -431,7 +431,25 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 
 /* ---- view picker and icon size slider */
 .view-pick { position: relative; }
-.view-menu { position: absolute; right: 0; top: 36px; min-width: 220px; }
+/* fixed under the button (top/right come from the button's position): the command bar scrolls sideways and clips */
+.view-menu { min-width: 230px; max-height: calc(100vh - 80px); overflow-y: auto; }
+
+/* ---- tiles and content views (Windows Explorer's "Tiles" and "Content") */
+.tiles-view { --t: 48px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px; padding: 8px; align-content: start; }
+.content-view { --t: 40px; display: flex; flex-direction: column; padding: 4px 8px; }
+.card { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border: 1px solid transparent; border-radius: var(--radius); min-width: 0; cursor: default; }
+.content-view .card { border-bottom-color: var(--border); border-radius: 0; padding: 8px 10px; }
+.card:hover { background: var(--hover); }
+.card.sel { background: var(--sel); border-color: var(--sel-border); }
+.card.drop { border-color: var(--accent); }
+.card.cut { opacity: .5; }
+.card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.card-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
+.card .thumb { flex-shrink: 0; }
+.card .rename { width: 100%; }
+@media (max-width: 640px) { .card-side { display: none; } }
 .size-slider { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--muted); }
 .size-slider input, .menu-slider input { width: 110px; accent-color: var(--accent); }
 .menu-slider { display: none; align-items: center; gap: 8px; padding: 6px 12px; color: var(--muted); }
