@@ -31,7 +31,7 @@ function SignIn({ setup, onDone }: { setup: boolean; onDone: (u: string) => void
   if (setup) return (
     <main className="g-login"><div className="g-login-card">
       <img src="/galeri-icon.svg" width={72} height={72} alt="" />
-      <h1>Galeri</h1><p>Önce DiskHaven'da yönetici hesabını oluştur.</p>
+      <h1>DiskHaven Gallery</h1><p>Önce DiskHaven'da yönetici hesabını oluştur.</p>
       <a className="g-fill-btn" href="/">DiskHaven'ı aç</a>
     </div></main>
   )
@@ -42,7 +42,7 @@ function SignIn({ setup, onDone }: { setup: boolean; onDone: (u: string) => void
         try { const r = await api.login(user, pass); onDone(r.user) } catch (err) { setError(err instanceof Error ? err.message : String(err)) } finally { setBusy(false) }
       }}>
         <img src="/galeri-icon.svg" width={72} height={72} alt="" />
-        <h1>Galeri</h1>
+        <h1>DiskHaven Gallery</h1>
         <p>DiskHaven hesabınla giriş yap.</p>
         <input className="g-input" placeholder="Kullanıcı adı" value={user} onChange={e => setUser(e.target.value)} autoComplete="username" autoCapitalize="none" required />
         <input className="g-input" placeholder="Parola" type="password" value={pass} onChange={e => setPass(e.target.value)} autoComplete="current-password" required />

@@ -1,7 +1,7 @@
 {
   "id": "/galeri.html",
-  "name": "Galeri — DiskHaven",
-  "short_name": "Galeri",
+  "name": "DiskHaven Gallery",
+  "short_name": "DiskHaven Gallery",
   "start_url": "/galeri.html",
   "scope": "/",
   "display": "standalone",

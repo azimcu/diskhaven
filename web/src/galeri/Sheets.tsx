@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { api } from '../api'
 import type { FileEntry, TrashItem } from '../types'
 import { isActive, isDone, uploads } from '../uploads'
-import { albumTitle, gapi, nameOf, parentOf, type AlbumInfo } from './gapi'
+import { albumTitle, gapi, nameOf, parentOf, type AlbumInfo, type TreeFolder } from './gapi'
 import { Icon, promptSheet, sheet, toast, toastError } from './ui'
 
 /** Picks the album (folder) to move or copy into: an existing album, a new album, or any folder. */
@@ -31,6 +31,7 @@ function AlbumPicker({ title, exclude, done }: { title: string; exclude?: string
         at = at ? `${at}/${part}` : part
       }
       const r = await api.createFolder(at, name)
+      await gapi.select([r.path])   // a new album is an album at once
       done(r.path)
     } catch (e) { toastError(e) }
   }
@@ -223,6 +224,78 @@ export function UploadStrip({ onFinished }: { onFinished: () => void }) {
     <div className="g-upload">
       <span>{active.some(i => i.status === 'waiting') ? 'Bağlantı bekleniyor' : 'Yükleniyor'}: {doneCount}/{snap.items.length}</span>
       <div className="g-bar"><div style={{ width: `${Math.round(progress * 100)}%` }} /></div>
+    </div>
+  )
+}
+
+
+/** "Albümleri seç": every folder with photos or videos as a tree; a ticked folder is an album. Layered: a folder shows only
+ *  its own photos, never its subfolders' (each subfolder is ticked on its own). Ticks are saved at once. */
+export function chooseAlbums() {
+  return sheet<boolean>(done => <AlbumTree done={done} />, false)
+}
+
+function AlbumTree({ done }: { done: (changed: boolean) => void }) {
+  const [folders, setFolders] = useState<TreeFolder[] | null>(null)
+  const [open, setOpen] = useState<Set<string>>(new Set(['']))
+  const [changed, setChanged] = useState(false)
+  useEffect(() => {
+    gapi.tree().then(r => {
+      setFolders(r.folders)
+      // open the way down to every ticked folder, so the current albums are visible
+      const o = new Set([''])
+      for (const f of r.folders) if (f.selected) for (let p = parentOf(f.path); p; p = parentOf(p)) o.add(p)
+      setOpen(o)
+    }).catch(e => { toastError(e); setFolders([]) })
+  }, [])
+
+  const children = (path: string) => (folders ?? []).filter(f => f.path !== '' && parentOf(f.path) === path)
+    .sort((a, b) => a.path.localeCompare(b.path, 'tr'))
+  const below = (path: string) => (folders ?? []).filter(f => f.path !== path && (path === '' || f.path.startsWith(path + '/')))
+
+  const tick = async (f: TreeFolder) => {
+    const on = !f.selected
+    setFolders(l => l && l.map(x => x.path === f.path ? { ...x, selected: on } : x))
+    setChanged(true)
+    try { await gapi.select(on ? [f.path] : [], on ? [] : [f.path]) }
+    catch (e) { toastError(e); setFolders(l => l && l.map(x => x.path === f.path ? { ...x, selected: !on } : x)) }
+  }
+
+  const row = (f: TreeFolder, depth: number): React.ReactNode => {
+    const kids = children(f.path)
+    const isOpen = open.has(f.path)
+    const inside = below(f.path).filter(x => x.selected).length
+    return (
+      <div key={f.path || '/'}>
+        <div className="g-tree-row" style={{ paddingLeft: 8 + depth * 18 }}>
+          <button className={`g-tree-arrow ${kids.length ? '' : 'none'} ${isOpen ? 'open' : ''}`} aria-label={isOpen ? 'Kapat' : 'Aç'} disabled={!kids.length}
+            onClick={() => setOpen(o => { const n = new Set(o); if (n.has(f.path)) n.delete(f.path); else n.add(f.path); return n })}>
+            <Icon name="chevron" size={20} /></button>
+          <label className={`g-tree-label ${f.count === 0 ? 'empty' : ''}`}>
+            <input type="checkbox" checked={f.selected} disabled={f.count === 0} onChange={() => tick(f)} />
+            <span className="g-tree-name"><b>{albumTitle(f.path)}</b>
+              <small>{f.count ? `${f.count} öğe` : 'kendi içinde fotoğraf yok'}{!isOpen && inside ? ` · içinde ${inside} albüm` : ''}</small></span>
+          </label>
+        </div>
+        {isOpen && kids.map(k => row(k, depth + 1))}
+      </div>
+    )
+  }
+
+  const root = folders?.find(f => f.path === '')
+  return (
+    <div className="g-scrim" onClick={() => done(changed)}>
+      <div className="g-bottom-sheet tall" onClick={e => e.stopPropagation()}>
+        <div className="g-handle" />
+        <h2>Albümleri seç</h2>
+        <p className="g-muted g-sheet-note">Tik koyduğun klasör galeride albüm olur. Albüm yalnız kendi içindeki fotoğrafları gösterir; alt klasörleri ayrıca seçersin.</p>
+        <div className="g-tree">
+          {folders === null && <div className="g-center"><div className="g-spinner" /></div>}
+          {folders?.length === 0 && <p className="g-muted g-pad">Henüz fotoğraf ya da video olan bir klasör yok.</p>}
+          {root && row(root, 0)}
+        </div>
+        <div className="g-dialog-actions"><button className="g-text-btn accent" onClick={() => done(changed)}>Tamam</button></div>
+      </div>
     </div>
   )
 }

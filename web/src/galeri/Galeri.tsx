@@ -4,7 +4,7 @@ import { filesFromInput, splitIdentical, uploads } from '../uploads'
 import { awake } from '../awake'
 import { albumTitle, gapi, nameOf, parentOf, type AlbumInfo, type Media } from './gapi'
 import { Grid, useMedia } from './Grid'
-import { openSettings, openTrash, pickAlbum, UploadStrip } from './Sheets'
+import { chooseAlbums, openSettings, openTrash, pickAlbum, UploadStrip } from './Sheets'
 import { confirmSheet, Icon, promptSheet, pushBack, toast, toastError } from './ui'
 import { Viewer } from './Viewer'
 
@@ -26,6 +26,13 @@ export function Galeri({ user, onLogout }: { user: string; onLogout: () => void 
 
   // first visit after start-up: make sure the index is fresh, then redraw
   useEffect(() => { gapi.scan().then(refresh).catch(() => {}) }, [refresh])
+
+  // DiskHaven'dan "Galeride aç": galeri.html#album=<klasör>
+  useEffect(() => {
+    const m = /^#album=(.*)$/.exec(location.hash)
+    if (m) { history.replaceState(null, '', location.pathname); setTab('albums'); push({ kind: 'album', path: decodeURIComponent(m[1]) }) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const closers = useRef<(() => void)[]>([])
   const push = (l: Layer) => {
@@ -64,6 +71,7 @@ export function Galeri({ user, onLogout }: { user: string; onLogout: () => void 
     try {
       if (copy) await api.copy(paths, dest)
       else await api.move(paths, dest)
+      await gapi.select([dest]).catch(() => {})   // photos sent somewhere from the gallery: that folder is an album now
       toast(`${paths.length} öğe ${copy ? 'kopyalandı' : 'taşındı'}: ${albumTitle(dest)}`)
       await changed(copy ? [] : paths)
       return true
@@ -77,7 +85,7 @@ export function Galeri({ user, onLogout }: { user: string; onLogout: () => void 
     <div className="g-app">
       <div className={`g-screen ${albumLayer ? 'covered' : ''}`}>
         <header className="g-top">
-          <h1>{tab === 'photos' ? 'Fotoğraflar' : 'Albümler'}</h1>
+          <div className="g-top-title"><small className="g-brand">DiskHaven Gallery</small><h1 className="g-big">{tab === 'photos' ? 'Fotoğraflar' : 'Albümler'}</h1></div>
           <button className="g-icon-btn" onClick={() => setMenu(true)} aria-label="Menü"><Icon name="more" /></button>
         </header>
         {tab === 'photos'
@@ -199,7 +207,6 @@ function MediaScreen({ album, version, onOpen, del, moveCopy, empty, header }: {
 // ---- albums ------------------------------------------------------------------------------------------------------
 function AlbumList({ version, onOpen, onChanged }: { version: number; onOpen: (a: AlbumInfo) => void; onChanged: () => void }) {
   const [albums, setAlbums] = useState<AlbumInfo[] | null>(null)
-  const [showHidden, setShowHidden] = useState(false)
   useEffect(() => { gapi.albums().then(r => setAlbums(r.albums)).catch(e => { toastError(e); setAlbums([]) }) }, [version])
 
   const create = async () => {
@@ -209,7 +216,6 @@ function AlbumList({ version, onOpen, onChanged }: { version: number; onOpen: (a
 
   if (albums === null) return <main className="g-scroll"><div className="g-center"><div className="g-spinner" /></div></main>
   const visible = albums.filter(a => !a.hidden)
-  const hidden = albums.filter(a => a.hidden)
   return (
     <main className="g-scroll">
       <div className="g-albums">
@@ -219,15 +225,10 @@ function AlbumList({ version, onOpen, onChanged }: { version: number; onOpen: (a
           <b>Yeni albüm</b>
         </button>
       </div>
-      {albums.length === 0 && <p className="g-muted g-pad">Henüz albüm yok. İçinde fotoğraf olan her klasör burada albüm olarak görünür.</p>}
-      {hidden.length > 0 && (
-        <>
-          <button className="g-hidden-toggle" onClick={() => setShowHidden(s => !s)}>
-            <Icon name={showHidden ? 'show' : 'hide'} size={20} /> Gizli albümler ({hidden.length})
-          </button>
-          {showHidden && <div className="g-albums dim">{hidden.map(a => <AlbumCard key={a.path} a={a} onOpen={() => onOpen(a)} />)}</div>}
-        </>
-      )}
+      {visible.length === 0 && <p className="g-muted g-pad">Henüz albüm seçilmedi. Aşağıdan klasörlerini tikleyerek albüm yapabilirsin.</p>}
+      <button className="g-hidden-toggle" onClick={async () => { if (await chooseAlbums()) onChanged() }}>
+        <Icon name="folder" size={20} /> Albümleri seç (klasör ağacı)
+      </button>
     </main>
   )
 }
@@ -265,6 +266,15 @@ function AlbumScreen({ path, version, onBack, onOpen, onRenamed, del, moveCopy, 
       changed()
     } catch (e) { toastError(e) }
   }
+  const toggleAlbum = async () => {
+    setMenu(false)
+    const on = !info || info.hidden
+    try {
+      await gapi.select(on ? [path] : [], on ? [] : [path])
+      toast(on ? 'Albüm galeride.' : 'Albüm galeriden çıkarıldı; klasör ve fotoğraflar yerinde duruyor.')
+      changed()
+    } catch (e) { toastError(e) }
+  }
   const rename = async () => {
     setMenu(false)
     if (path === '') return
@@ -278,6 +288,7 @@ function AlbumScreen({ path, version, onBack, onOpen, onRenamed, del, moveCopy, 
         hidden: s.albums.filter(a => a.hidden).map(a => a.path === path ? r.path : a.path),
         pinned: s.albums.filter(a => a.pinned).map(a => a.path === path ? r.path : a.path),
       })
+      if (!info?.hidden) await gapi.select([r.path], [path])   // still an album under its new name
       onRenamed(r.path)
     } catch (e) { toastError(e) }
   }
@@ -295,7 +306,7 @@ function AlbumScreen({ path, version, onBack, onOpen, onRenamed, del, moveCopy, 
         header={(selecting, bar) => selecting ? bar : (
           <header className="g-top">
             <button className="g-icon-btn" onClick={onBack} aria-label="Geri"><Icon name="back" /></button>
-            <div className="g-top-title"><h1>{albumTitle(path)}</h1>{info && <small>{info.count} öğe{info.hidden ? ' · gizli' : ''}</small>}</div>
+            <div className="g-top-title"><h1>{albumTitle(path)}</h1>{info && <small>{info.count} öğe{info.hidden ? ' · galeride albüm değil' : ''}</small>}</div>
             <button className="g-icon-btn" onClick={() => setMenu(true)} aria-label="Albüm menüsü"><Icon name="more" /></button>
           </header>
         )} />
@@ -318,7 +329,8 @@ function AlbumScreen({ path, version, onBack, onOpen, onRenamed, del, moveCopy, 
           <div className="g-menu" onClick={e => e.stopPropagation()}>
             <button onClick={() => { setMenu(false); awake.prime(); input.current?.click() }}><Icon name="upload" size={20} />Fotoğraf / video ekle</button>
             <button onClick={() => setFlag('pinned', !info?.pinned)}><Icon name="pin" size={20} />{info?.pinned ? 'Sabitlemeyi kaldır' : 'Albümü sabitle'}</button>
-            <button onClick={() => setFlag('hidden', !info?.hidden)}><Icon name={info?.hidden ? 'show' : 'hide'} size={20} />{info?.hidden ? 'Albümü göster' : 'Albümü gizle'}</button>
+            <button onClick={toggleAlbum}><Icon name={info && !info.hidden ? 'hide' : 'show'} size={20} />{info && !info.hidden ? 'Galeriden çıkar (klasör kalır)' : 'Galeride albüm yap'}</button>
+            <a className="g-menu-link" href={`/#/files/${path.split('/').map(encodeURIComponent).join('/')}`}><Icon name="folder" size={20} />DiskHaven'da aç</a>
             {path !== '' && <button onClick={rename}><Icon name="rename" size={20} />Yeniden adlandır</button>}
             {path !== '' && <button className="danger" onClick={remove}><Icon name="trash" size={20} />Albümü sil</button>}
             <p className="g-menu-note">Konum: /{path}</p>

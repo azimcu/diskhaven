@@ -2,6 +2,7 @@ import { api, csrfHeader } from '../api'
 
 export interface Media { path: string; album: string; name: string; size: number; modified: number; taken: number; video: boolean }
 export interface AlbumInfo { path: string; name: string; count: number; videos: number; cover: string; latest: number; hidden: boolean; pinned: boolean }
+export interface TreeFolder { path: string; count: number; selected: boolean }
 export interface AlbumsResult { albums: AlbumInfo[]; scanning: boolean; lastScan: string | null; newAlbumParent: string }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -30,6 +31,8 @@ export const gapi = {
   scan: () => call<{ count: number; scanning: boolean }>('POST', '/api/gallery/scan'),
   forget: (paths: string[]) => call<void>('POST', '/api/gallery/forget', { paths }),
   settings: (s: { hidden?: string[]; pinned?: string[]; newAlbumParent?: string }) => call<void>('PUT', '/api/gallery/settings', s),
+  tree: () => call<{ folders: TreeFolder[]; scanning: boolean }>('GET', '/api/gallery/tree'),
+  select: (add: string[], remove: string[] = []) => call<void>('POST', '/api/gallery/albums/select', { add, remove }),
   thumb: (path: string, size: 's' | 'm' = 's') => `/api/gallery/thumb?path=${q(path)}&size=${size}`,
   original: (path: string, download = false) => api.contentUrl(path, download),
 }

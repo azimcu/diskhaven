@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
   FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, LayoutList, Link2, List, MoreVertical, PanelRight, Pencil,
-  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X, ArrowUpDown, CheckCheck,
+  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X, ArrowUpDown, CheckCheck, Images, ImageOff, ImagePlus,
 } from 'lucide-react'
 
 const VIEWS = ['icons', 'list', 'details', 'tiles', 'content']
@@ -31,6 +31,7 @@ import type { DriveInfo, FileEntry } from './types'
 import { uploadFiles } from './conflicts'
 import { filesFromInput, isActive, uploadEvents, uploads } from './uploads'
 import { transfersPanel } from './Transfers'
+import { gapi } from './galeri/gapi'
 import { startTransfer } from './TransferBar'
 import { awake } from './awake'
 
@@ -97,6 +98,20 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   const basePlugins = usePlugins()
   // sharing, favourites and previous versions belong to the main storage
   const plugins = { ...basePlugins, has: (id: string) => basePlugins.has(id) && (!onDisk || !['sharing', 'quick', 'versions'].includes(id)) }
+  // DiskHaven Gallery: which folders are albums (only the main storage has a gallery)
+  const galleryOn = basePlugins.has('gallery') && !onDisk
+  const [galleryAlbums, setGalleryAlbums] = useState<Set<string> | null>(null)
+  useEffect(() => {
+    if (!galleryOn) { setGalleryAlbums(null); return }
+    gapi.tree().then(r => setGalleryAlbums(new Set(r.folders.filter(f => f.selected).map(f => f.path)))).catch(() => setGalleryAlbums(null))
+  }, [galleryOn, path, version])
+  const setGalleryAlbum = async (folder: string, on: boolean) => {
+    try {
+      await gapi.select(on ? [folder] : [], on ? [] : [folder])
+      setGalleryAlbums(s => { const n = new Set(s ?? []); if (on) n.add(folder); else n.delete(folder); return n })
+      toast(on ? 'Klasör galeride albüm oldu.' : 'Klasör galeriden çıkarıldı (dosyalar yerinde).')
+    } catch (e) { toastError(e) }
+  }
   const [favorites, setFavorites] = useState<Set<string>>(new Set())
   useEffect(() => { if (plugins.has('quick')) api.quick().then(q => setFavorites(new Set(q.favorites))).catch(() => {}) }, [plugins.has('quick'), version])
   const toggleFavorite = async (e: FileEntry) => {
@@ -713,6 +728,10 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
             ? { label: t.unhide, icon: <Eye size={16} />, run: () => setHidden(sel, false) }
             : { label: t.hide, icon: <EyeOff size={16} />, run: () => setHidden(sel, true) }),
           single && results && { label: t.openLocation, icon: <FolderOpen size={16} />, run: () => navigate(parentOf(single.path)) },
+          galleryOn && single?.kind === 'Folder' && { label: 'Galeride aç', icon: <Images size={16} />, run: () => { location.href = `/galeri.html#album=${encodeURIComponent(single.path)}` } },
+          galleryOn && single?.kind === 'Folder' && galleryAlbums && (galleryAlbums.has(single.path)
+            ? { label: 'Galeriden çıkar', icon: <ImageOff size={16} />, run: () => void setGalleryAlbum(single.path, false) }
+            : { label: 'Galeride albüm yap', icon: <ImagePlus size={16} />, run: () => void setGalleryAlbum(single.path, true) }),
           !ro && { label: t.delete, icon: <Trash2 size={16} />, hint: 'Del', run: () => remove(sel) },
           'sep',
           single && { label: t.properties, icon: <Info size={16} />, hint: 'Alt+Enter', run: () => void propertiesDialog(single, load) },

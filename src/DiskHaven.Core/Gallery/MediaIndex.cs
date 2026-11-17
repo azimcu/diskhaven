@@ -132,6 +132,13 @@ public sealed class MediaIndex
         File.Move(tmp, _file, overwrite: true);
     }
 
+    /// <summary>Every folder that directly holds photos or videos, with how many.</summary>
+    public IReadOnlyDictionary<string, int> AlbumCounts()
+    {
+        lock (_lock)
+            return _items.Values.GroupBy(i => i.Album, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+    }
+
     /// <summary>Albums, newest first; pinned albums lead. Hidden albums are included and flagged.</summary>
     public IReadOnlyList<Album> Albums(ISet<string> hidden, IList<string> pinned)
     {

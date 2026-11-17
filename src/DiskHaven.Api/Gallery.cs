@@ -21,8 +21,42 @@ public sealed class GallerySettings(PluginStore plugins)
     public List<string> Pinned => Read("pinned");
     public string NewAlbumParent => plugins.Settings(Id)["newAlbumParent"]?.GetValue<string>() ?? "DCIM";
 
+    /// <summary>
+    /// Folders chosen in the album tree (only these are albums; each shows only its own files, not its subfolders').
+    /// Null until the tree is first used: then every album that was visible becomes selected, so nothing disappears.
+    /// </summary>
+    public HashSet<string>? Selected => plugins.Settings(Id)["albums"] is JsonArray ? Read("albums").ToHashSet(StringComparer.Ordinal) : null;
+
+    /// <summary>Selected albums, creating the list from the old hidden-album setting the first time (after a scan).</summary>
+    public HashSet<string>? EnsureSelected(MediaIndex index)
+    {
+        var sel = Selected;
+        if (sel is not null || index.LastScan is null)
+            return sel;
+        var hidden = Hidden;
+        sel = index.AlbumCounts().Keys.Where(a => !hidden.Contains(a)).ToHashSet(StringComparer.Ordinal);
+        SaveAlbums(sel);
+        return sel;
+    }
+
+    /// <summary>What the gallery leaves out: unselected albums (or, before the tree is used, the old hidden list).</summary>
+    public HashSet<string> EffectiveHidden(MediaIndex index)
+    {
+        var sel = EnsureSelected(index);
+        if (sel is null)
+            return Hidden;
+        return index.AlbumCounts().Keys.Where(a => !sel.Contains(a)).ToHashSet(StringComparer.Ordinal);
+    }
+
+    public void SaveAlbums(IEnumerable<string> albums)
+    {
+        var s = plugins.Settings(Id);
+        s["albums"] = new JsonArray(albums.Select(VaultRoot.Normalize).Distinct().Order(StringComparer.Ordinal).Select(x => (JsonNode)x!).ToArray());
+        plugins.SaveSettings(Id, s);
+    }
+
     private List<string> Read(string key) =>
-        plugins.Settings(Id)[key] is JsonArray a ? a.Select(x => x?.GetValue<string>() ?? "").Where(x => x.Length > 0 || key == "hidden").Distinct().ToList() : [];
+        plugins.Settings(Id)[key] is JsonArray a ? a.Select(x => x?.GetValue<string>() ?? "").Where(x => x.Length > 0 || key is "hidden" or "albums").Distinct().ToList() : [];
 
     public void Save(IEnumerable<string>? hidden, IEnumerable<string>? pinned, string? newAlbumParent)
     {
@@ -243,6 +277,7 @@ public sealed class GalleryScanner(MediaIndex index, PluginStore plugins, ILogge
     }
 }
 
+public sealed record GallerySelectRequest(string[]? Add, string[]? Remove);
 public sealed record GallerySettingsRequest(string[]? Hidden, string[]? Pinned, string? NewAlbumParent);
 public sealed record GalleryForgetRequest(string[] Paths);
 
@@ -255,7 +290,7 @@ public static class GalleryEndpoints
         g.MapGet("/albums", (MediaIndex index, GallerySettings settings) =>
             Results.Ok(new
             {
-                albums = index.Albums(settings.Hidden, settings.Pinned),
+                albums = index.Albums(settings.EffectiveHidden(index), settings.Pinned),
                 scanning = index.Scanning,
                 lastScan = index.LastScan,
                 newAlbumParent = settings.NewAlbumParent,
@@ -264,7 +299,7 @@ public static class GalleryEndpoints
         // album omitted = all photos of the visible albums (the "Photos" tab)
         g.MapGet("/media", (string? album, int? offset, int? limit, MediaIndex index, GallerySettings settings) =>
         {
-            var (total, items) = index.Media(album is null ? null : VaultRoot.Normalize(album), settings.Hidden, offset ?? 0, limit ?? 300);
+            var (total, items) = index.Media(album is null ? null : VaultRoot.Normalize(album), settings.EffectiveHidden(index), offset ?? 0, limit ?? 300);
             return Results.Ok(new { total, items });
         });
 
@@ -294,6 +329,39 @@ public static class GalleryEndpoints
         g.MapPost("/forget", (GalleryForgetRequest req, MediaIndex index) =>
         {
             index.Forget(req.Paths ?? []);
+            return Results.NoContent();
+        });
+
+        // album tree: every folder that holds media (directly or deeper down), with its own count and whether it is an album
+        g.MapGet("/tree", (MediaIndex index, GallerySettings settings) =>
+        {
+            var counts = index.AlbumCounts();
+            var sel = settings.EnsureSelected(index) ?? counts.Keys.Where(a => !settings.Hidden.Contains(a)).ToHashSet(StringComparer.Ordinal);
+            var folders = new SortedDictionary<string, int>(StringComparer.Ordinal);
+            foreach (var (path, n) in counts)
+            {
+                folders[path] = n;
+                for (var p = path; p.Contains('/');)   // the folders above it, so the tree can be opened down to it
+                {
+                    p = p[..p.LastIndexOf('/')];
+                    folders.TryAdd(p, 0);
+                }
+                if (path.Length > 0) folders.TryAdd("", counts.GetValueOrDefault(""));
+            }
+            return Results.Ok(new
+            {
+                folders = folders.Select(f => new { path = f.Key, count = f.Value, selected = sel.Contains(f.Key) }),
+                scanning = index.Scanning,
+            });
+        });
+
+        // tick / untick one or more folders in the album tree
+        g.MapPost("/albums/select", (GallerySelectRequest req, MediaIndex index, GallerySettings settings) =>
+        {
+            var sel = settings.EnsureSelected(index) ?? [];
+            foreach (var p in req.Add ?? []) sel.Add(VaultRoot.Normalize(p));
+            foreach (var p in req.Remove ?? []) sel.Remove(VaultRoot.Normalize(p));
+            settings.SaveAlbums(sel);
             return Results.NoContent();
         });
 
