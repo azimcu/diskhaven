@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
-import { KeyRound, LogOut, Menu as MenuIcon, Moon, ShieldCheck, Sun, UserCircle2 } from 'lucide-react'
+import { Check, KeyRound, LogOut, Menu as MenuIcon, Moon, ShieldCheck, Sun, UserCircle2 } from 'lucide-react'
 import { effectiveTheme, onDeviceThemeChange, pickTheme, savedTheme, type Theme } from './theme'
 import { api } from './api'
 import { promptDialog, toast, toastError, Toasts } from './dialogs'
@@ -143,14 +143,16 @@ export function App() {
     <div className="app">
       {auth.demo && <div className="demo-bar" role="note">Demo: değişiklikler her saat başı sıfırlanır · dosya başına en fazla 20 MB · disk ve hesap ayarları kapalı</div>}
       <header className="titlebar">
-        <button className="icon-btn show-sm burger" onClick={() => setDrawer(d => !d)} aria-label="Klasörler"><MenuIcon size={24} /></button>
+        <button className="icon-btn show-sm burger" onClick={() => setDrawer(d => !d)} aria-label="Klasörler"><MenuIcon size={20} /></button>
         <img src="/icon.svg" width={20} height={20} alt="" />
         <span className="brand">{t.appName}</span>
         <span className="grow" />
-        <div className="theme-switch" role="group" aria-label="Tema">
+        <div className="theme-switch hide-sm" role="group" aria-label="Tema">
           <button className={theme === 'light' ? 'on' : ''} aria-pressed={theme === 'light'} onClick={() => setPicked(pickTheme('light'))} title="Açık tema"><Sun size={15} /></button>
           <button className={theme === 'dark' ? 'on' : ''} aria-pressed={theme === 'dark'} onClick={() => setPicked(pickTheme('dark'))} title="Koyu tema"><Moon size={15} /></button>
         </div>
+        {/* phone: the open folder's tools (refresh, new folder, select, view) are drawn here by the explorer */}
+        <div id="title-tools" className="title-tools show-sm-flex" />
         <div className="user">
           <button className="user-btn" onClick={() => setUserMenu(m => !m)}><UserCircle2 size={18} /> <span className="hide-sm">{auth.user}</span></button>
           {userMenu && (
@@ -158,6 +160,10 @@ export function App() {
               <div className="menu-backdrop" onMouseDown={() => setUserMenu(false)} />
               <div className="menu user-menu">
                 {auth.isAdmin && <button className="menu-item" onClick={() => { setUserMenu(false); location.hash = '#/admin' }}><span className="menu-ic"><ShieldCheck size={16} /></span>Yönetim paneli</button>}
+                {/* phone: the theme switch lives here instead of the title bar */}
+                <button className="menu-item show-sm-flex" onClick={() => { setUserMenu(false); setPicked(pickTheme('light')) }}><span className="menu-ic">{theme === 'light' ? <Check size={15} /> : <Sun size={16} />}</span>Açık tema</button>
+                <button className="menu-item show-sm-flex" onClick={() => { setUserMenu(false); setPicked(pickTheme('dark')) }}><span className="menu-ic">{theme === 'dark' ? <Check size={15} /> : <Moon size={16} />}</span>Koyu tema</button>
+                <div className="menu-sep show-sm-flex" />
                 <button className="menu-item" onClick={changePassword}><span className="menu-ic"><KeyRound size={16} /></span>{t.changePassword}</button>
                 <button className="menu-item" onClick={logout}><span className="menu-ic"><LogOut size={16} /></span>{t.logout}</button>
               </div>

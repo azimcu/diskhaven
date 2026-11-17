@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
   FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, LayoutList, Link2, List, MoreVertical, PanelRight, Pencil,
@@ -122,6 +123,9 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   // phone: selection mode (long press, or "Seç" in the bottom bar); a tap then ticks items instead of opening them
   const [selectMode, setSelectMode] = useState(false)
   const [phoneMore, setPhoneMore] = useState<{ x: number; y: number } | null>(null)
+  const moreBtn = useRef<HTMLButtonElement>(null)
+  const [toolSlot, setToolSlot] = useState<HTMLElement | null>(null)
+  useEffect(() => setToolSlot(document.getElementById('title-tools')), [])
   const upl = useSyncExternalStore(uploads.subscribe, uploads.getSnapshot)
   const busy = upl.items.filter(i => isActive(i.status)).length
   const hasTransfers = upl.batches.length > 0 || uploads.unfinished().length > 0
@@ -460,14 +464,14 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
         <button className={`cmd icon-only hide-sm ${pane ? 'on' : ''}`} onClick={() => { setPane(!pane); writePref('hv.pane', pane ? '0' : '1') }} title={t.previewPane}><PanelRight size={16} /></button>
       </div>
 
-      {/* phone only: a second row under the title bar, buttons from the right: view, select, new folder, refresh */}
-      <div className="phone-tools show-sm-flex" role="toolbar" aria-label="Klasör araçları">
-        <button className="pt-btn" onClick={load} title={t.refresh} aria-label={t.refresh}><RefreshCw size={22} /></button>
-        <button className="pt-btn" disabled={ro} onClick={newFolder} title={t.newFolder} aria-label={t.newFolder}><FolderPlus size={22} /></button>
-        <button className={`pt-btn ${selecting ? 'on' : ''}`} disabled={shown.length === 0} onClick={() => (selecting ? endSelect() : setSelectMode(true))} title="Seç" aria-label="Seç" aria-pressed={selecting}><CheckSquare size={22} /></button>
+      {/* phone only: folder tools in the title bar, next to the profile button (drawn into App's #title-tools) */}
+      {toolSlot && createPortal(<>
+        <button className="pt-btn" onClick={load} title={t.refresh} aria-label={t.refresh}><RefreshCw size={20} /></button>
+        <button className="pt-btn" disabled={ro} onClick={newFolder} title={t.newFolder} aria-label={t.newFolder}><FolderPlus size={20} /></button>
+        <button className={`pt-btn ${selecting ? 'on' : ''}`} disabled={shown.length === 0} onClick={() => (selecting ? endSelect() : setSelectMode(true))} title="Seç" aria-label="Seç" aria-pressed={selecting}><CheckSquare size={20} /></button>
         <button className="pt-btn" onClick={e => { e.stopPropagation(); toggleViewMenu(e.currentTarget) }} title={t.viewMode} aria-label={t.viewMode} aria-haspopup="menu">
-          {viewIcon(view, 22)}</button>
-      </div>
+          {viewIcon(view, 20)}</button>
+      </>, toolSlot)}
 
       {viewMenu && (
         <>
@@ -679,12 +683,12 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           </>
         ) : (
           <div className="mb-actions">
-            <button onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setPhoneMore(m => m ? null : { x: r.left, y: r.top }) }}><MoreVertical size={22} /><span>Diğer</span></button>
+            <button className="primary" disabled={ro} onClick={() => pickUpload(false)}><Upload size={22} /><span>{t.upload}</span></button>
+            <button onClick={() => history.back()}><ArrowLeft size={22} /><span>{t.back}</span></button>
+            <button disabled={shown.length === 0} onClick={() => setSelectMode(true)}><CheckSquare size={22} /><span>Seç</span></button>
             <button className={`mb-transfers ${busy > 0 ? 'busy' : ''}`} disabled={!hasTransfers} onClick={() => transfersPanel.set(!transfersPanel.hidden)}>
               <ArrowUpDown size={22} />{busy > 0 && <b className="mb-badge">{busy}</b>}<span>İşlemler</span></button>
-            <button disabled={shown.length === 0} onClick={() => setSelectMode(true)}><CheckSquare size={22} /><span>Seç</span></button>
-            <button onClick={() => history.back()}><ArrowLeft size={22} /><span>{t.back}</span></button>
-            <button className="primary" disabled={ro} onClick={() => pickUpload(false)}><Upload size={22} /><span>{t.upload}</span></button>
+            <button ref={moreBtn} onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setPhoneMore(m => m ? null : { x: r.right, y: r.top }) }}><MoreVertical size={22} /><span>Diğer</span></button>
           </div>
         )}
       </nav>
@@ -732,6 +736,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           !ro && { label: t.newFolder, icon: <FolderPlus size={16} />, run: newFolder },
           { label: t.refresh, icon: <RefreshCw size={16} />, run: load },
           shown.length > 0 && { label: t.selectAll, icon: <CheckCheck size={16} />, run: () => { setSelectMode(true); setSelected(new Set(shown.map(x => x.path))) } },
+          { label: t.viewMode, icon: viewIcon(view), run: () => setTimeout(() => toggleViewMenu(moreBtn.current), 0) },
         ]} />
       )}
 
