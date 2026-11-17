@@ -169,6 +169,8 @@ export const api = {
     archiveUrl: (ids: string[]) => `/api/hideaway/archive?${ids.map(i => `ids=${encodeURIComponent(i)}`).join('&')}`,
   },
 
+  thumbUrl: (path: string, size: 's' | 'm' = 's', drive?: string) => `/api/files/thumb?path=${q(path)}&size=${size}${dq(drive)}`,
+  warmThumbs: (path: string, drive?: string) => request<{ queued: number }>('POST', '/api/files/thumbs/warm', { path, ...db(drive) }),
   contentUrl: (path: string, download = false, drive?: string) => `/api/files/content?path=${q(path)}${download ? '&download=true' : ''}${dq(drive)}`,
 }
 

@@ -19,7 +19,8 @@ const viewIcon = (v: string) =>
 import { api } from './api'
 import { toast, toastError } from './dialogs'
 import { FileIcon } from './FileIcon'
-import { formatDate, formatSize, nameOf, parentOf, previewKind, typeName, uniqueName } from './format'
+import { formatDate, formatSize, hasThumb, nameOf, parentOf, previewKind, typeName, uniqueName } from './format'
+import { BLANK, useNearScreen } from './nearScreen'
 import { PreviewModal, PreviewPane } from './Preview'
 import { propertiesDialog } from './Properties'
 import { SystemGauge } from './SystemGauge'
@@ -139,7 +140,11 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   const load = useCallback(() => {
     if (resultsRef.current) void runSearch(resultsRef.current.q) // keep search results fresh after rename/delete
     api.list(path, d)
-      .then(l => { setEntries(tag(l.entries)); setError(null) })
+      .then(l => {
+        setEntries(tag(l.entries)); setError(null)
+        // make the previews of the whole folder in the background, so scrolling down finds them ready
+        if (l.entries.some(e => e.kind === 'File' && hasThumb(e.extension))) api.warmThumbs(path, d).catch(() => {})
+      })
       .catch(e => { setEntries([]); setError(e.message) })
   }, [path, drive, runSearch])
 
@@ -788,8 +793,18 @@ export function RenameInput({ entry, onDone, onCancel }: { entry: FileEntry; onD
 
 function Thumb({ entry, size }: { entry: FileEntry; size: number }) {
   const [broken, setBroken] = useState(false)
-  if (entry.kind === 'File' && previewKind(entry.extension) === 'image' && !broken)
-    return <img className="thumb" src={api.contentUrl(entry.path, false, entry.drive)} alt="" loading="lazy" decoding="async" onError={() => setBroken(true)} />
+  const [loaded, setLoaded] = useState(false)
+  const file = entry.kind === 'File'
+  const small = file && hasThumb(entry.extension) && !broken
+  const svg = file && entry.extension === 'svg' && !broken
+  const [ref, near] = useNearScreen<HTMLImageElement>(small || svg)
+  useEffect(() => { setBroken(false); setLoaded(false) }, [entry.path, entry.modified])
+  if (small || svg) {
+    // a small cached preview, asked for only while on screen; the original is never downloaded just to draw an icon
+    const url = svg ? api.contentUrl(entry.path, false, entry.drive) : api.thumbUrl(entry.path, 's', entry.drive)
+    return <img ref={ref} className={`thumb${loaded ? '' : ' loading'}`} src={near || loaded ? url : BLANK} alt="" decoding="async" draggable={false}
+      onLoad={e => { if (e.currentTarget.src !== BLANK) setLoaded(true) }} onError={() => setBroken(true)} />
+  }
   return <span className="thumb icon"><FileIcon entry={entry} size={Math.round(size * 0.62)} /></span>
 }
 

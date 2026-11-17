@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -53,8 +54,68 @@ public sealed class Thumbnails
     private static bool OnPath(string tool) =>
         (Environment.GetEnvironmentVariable("PATH") ?? "").Split(':').Any(d => d.Length > 0 && File.Exists(Path.Combine(d, tool)));
 
+    // Previews someone is looking at right now always go first; the warm-up queue (a folder's remaining
+    // photos, made ahead so scrolling down finds them ready) only runs while nobody is waiting.
+    private int _interactive;
+    private readonly System.Threading.Channels.Channel<string> _warm =
+        System.Threading.Channels.Channel.CreateBounded<string>(new System.Threading.Channels.BoundedChannelOptions(50_000)
+            { FullMode = System.Threading.Channels.BoundedChannelFullMode.DropWrite, SingleReader = true });
+    private readonly ConcurrentDictionary<string, byte> _queued = new();
+
+    /// <summary>Queues grid previews ("s") to be made in the background. Already made or queued ones are skipped.</summary>
+    public int Warm(IEnumerable<string> fullPaths)
+    {
+        var n = 0;
+        foreach (var full in fullPaths)
+        {
+            if (!MediaIndex.IsMedia(full) || (MediaIndex.IsVideo(full) ? !FfmpegAvailable : !VipsAvailable) || SpecialFiles.IsSpecial(full))
+                continue;
+            var target = Target(full, "s");
+            if (target is null || File.Exists(target) || !_queued.TryAdd(full, 0))
+                continue;
+            if (_warm.Writer.TryWrite(full)) n++;
+            else _queued.TryRemove(full, out _);
+        }
+        return n;
+    }
+
+    /// <summary>Runs by the <see cref="ThumbnailWarmer"/>: one preview at a time, pausing while previews are being asked for.</summary>
+    public async Task WarmLoopAsync(CancellationToken ct)
+    {
+        await foreach (var full in _warm.Reader.ReadAllAsync(ct))
+        {
+            try
+            {
+                while (Volatile.Read(ref _interactive) > 0)
+                    await Task.Delay(250, ct);
+                await MakeAsync(full, "s", ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception e) { _log.LogDebug(e, "Preview warm-up failed for {Path}", full); }
+            finally { _queued.TryRemove(full, out _); }
+        }
+    }
+
+    public int Queued => _queued.Count;
+
+    private string? Target(string full, string variant)
+    {
+        var info = new FileInfo(full);
+        if (!info.Exists)
+            return null;
+        var key = Convert.ToHexStringLower(SHA1.HashData(Encoding.UTF8.GetBytes($"{full}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{variant}")));
+        return Path.Combine(_cache, key[..2], key + ".jpg");
+    }
+
     /// <summary>"s" = 360 px square for grids, "m" = up to 1600 px for the viewer. Null when no preview can be made.</summary>
     public async Task<string?> GetAsync(string full, string variant, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _interactive);
+        try { return await MakeAsync(full, variant, ct); }
+        finally { Interlocked.Decrement(ref _interactive); }
+    }
+
+    private async Task<string?> MakeAsync(string full, string variant, CancellationToken ct)
     {
         var info = new FileInfo(full);
         if (!info.Exists)
@@ -152,6 +213,12 @@ public sealed class Thumbnails
             return false;
         }
     }
+}
+
+/// <summary>Makes the queued previews in the background (see <see cref="Thumbnails.Warm"/>).</summary>
+public sealed class ThumbnailWarmer(Thumbnails thumbs) : BackgroundService
+{
+    protected override Task ExecuteAsync(CancellationToken stoppingToken) => thumbs.WarmLoopAsync(stoppingToken);
 }
 
 /// <summary>Keeps the media index fresh while the gallery plugin is installed: at start-up and every few minutes.</summary>

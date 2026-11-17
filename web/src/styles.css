@@ -677,3 +677,4 @@ a.tree-row { color: inherit; text-decoration: none; }
   .menu kbd { display: none; }
   .menu-item { min-height: 44px; }
 }
+.thumb.loading { background: rgba(127, 127, 127, .14); }

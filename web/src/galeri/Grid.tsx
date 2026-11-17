@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { api } from '../api'
+import { BLANK, useNearScreen } from '../nearScreen'
 import { browserCanShow, dayKey, dayLabel, gapi, type Media } from './gapi'
 import { Icon, toastError } from './ui'
 
@@ -12,6 +14,8 @@ export function useMedia(album: string | null, version: number) {
   useEffect(() => {
     const my = ++gen.current
     loading.current = true
+    // an album is a folder: have its previews made in the background while the first screen loads
+    if (album !== null) api.warmThumbs(album).catch(() => {})
     gapi.media(album, 0).then(r => {
       if (gen.current !== my) return
       setItems(r.items); setTotal(r.total)
@@ -36,10 +40,16 @@ export function Thumb({ m, size = 's' }: { m: Media; size?: 's' | 'm' }) {
   const [src, setSrc] = useState(gapi.thumb(m.path, size))
   const [failed, setFailed] = useState(false)
   useEffect(() => { setSrc(gapi.thumb(m.path, size)); setFailed(false) }, [m.path, size])
+  const [loaded, setLoaded] = useState(false)
+  const [ref, near] = useNearScreen<HTMLImageElement>(!failed)
+  useEffect(() => setLoaded(false), [src])
   if (failed) return <div className="g-thumb-missing"><Icon name={m.video ? 'play' : 'photos'} size={28} /></div>
   return (
-    <img src={src} alt="" loading="lazy" decoding="async" draggable={false}
+    // asked for only while on screen, so a fast scroll to the bottom does not wait for everything above
+    <img ref={ref} src={near || loaded ? src : BLANK} alt="" decoding="async" draggable={false}
+      onLoad={e => { if (e.currentTarget.src !== BLANK) setLoaded(true) }}
       onError={() => {
+        if (!near && !loaded) return
         // no server preview (tools missing / odd file): a browser-friendly photo can still show itself
         if (!m.video && browserCanShow(m.name) && !src.startsWith('/api/files')) setSrc(gapi.original(m.path))
         else setFailed(true)

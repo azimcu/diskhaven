@@ -49,6 +49,7 @@ builder.Services.AddSingleton(new DiskHaven.Core.Gallery.MediaIndex(root, Path.C
 builder.Services.AddSingleton<GallerySettings>();
 builder.Services.AddSingleton(sp => new Thumbnails(configDir, sp.GetRequiredService<ILogger<Thumbnails>>()));
 builder.Services.AddHostedService<GalleryScanner>();
+builder.Services.AddHostedService<ThumbnailWarmer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SystemStats>());
 builder.Services.AddSingleton(new AccountStore(configDir));
 builder.Services.AddSingleton(new ShareStore(configDir));
@@ -229,6 +230,33 @@ files.MapGet("/", (string? path, string? drive, ClaimsPrincipal user, Drives dri
 files.MapGet("/content", (string path, string? drive, bool? download, HttpContext ctx, Drives drives) => Guard(() =>
 {
     return ServeFile(ctx, drives.Resolve(drive, ctx.User).Browser.GetFile(path), download == true);
+}));
+
+// small previews for the explorer's icon views (any drive, gallery plugin not needed); made once, then served from the cache
+files.MapGet("/thumb", async (string path, string? drive, string? size, HttpContext ctx, Drives drives, Thumbnails thumbs, CancellationToken ct) =>
+{
+    string full = "";
+    var bad = Guard(() => { full = drives.Resolve(drive, ctx.User).Browser.GetFile(path); return Results.Empty; });
+    if (bad != Results.Empty)
+        return bad;
+    if (!DiskHaven.Core.Gallery.MediaIndex.IsMedia(full))
+        return Results.NotFound();
+    var file = await thumbs.GetAsync(full, size == "m" ? "m" : "s", ct);
+    if (file is null)
+        return Results.NotFound();
+    ctx.Response.Headers.CacheControl = "private, max-age=604800";
+    ctx.Response.Headers.XContentTypeOptions = "nosniff";
+    return Results.File(file, "image/jpeg", lastModified: File.GetLastWriteTimeUtc(file));
+});
+
+// a folder was opened: make the previews of all its photos and videos in the background, so scrolling finds them ready
+files.MapPost("/thumbs/warm", (WarmRequest req, ClaimsPrincipal user, Drives drives, Thumbnails thumbs) => Guard(() =>
+{
+    var d = drives.Resolve(req.Drive, user);
+    var media = d.Browser.List(req.Path)
+        .Where(e => e.Kind == EntryKind.File && DiskHaven.Core.Gallery.MediaIndex.IsMedia(e.Name))
+        .Select(e => d.Root.Resolve(e.Path));
+    return Results.Ok(new { queued = thumbs.Warm(media), waiting = thumbs.Queued });
 }));
 
 files.MapPost("/folder", (FolderRequest req, ClaimsPrincipal user, Drives drives) =>
@@ -901,6 +929,7 @@ static IResult Guard(Func<IResult> action)
 record SetupRequest(string Token, string UserName, string Password);
 record LoginRequest(string UserName, string Password);
 record PasswordRequest(string CurrentPassword, string NewPassword);
+record WarmRequest(string? Path, string? Drive = null);
 record FolderRequest(string? Parent, string Name, string? Drive = null);
 record RenameRequest(string Path, string NewName, string? Drive = null);
 record TransferRequest(string[] Paths, string? Destination, string? Drive = null);
