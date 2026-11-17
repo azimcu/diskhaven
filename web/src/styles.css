@@ -623,3 +623,57 @@ details.recent summary::-webkit-details-marker { display: none; }
 }
 .problem-mark { color: var(--danger); font-size: .85em; margin-left: .25em; }
 a.tree-row { color: inherit; text-decoration: none; }
+
+/* ---- phone: bottom action bar, selection mode, compact search (17.11) ---- */
+.mobile-bar { display: none; }
+.check { display: inline-grid; place-items: center; color: var(--muted); }
+.sel .check { color: var(--accent); }
+.tr-tip { margin: 0; padding: 6px 14px; color: var(--muted); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; }
+.tr-earlier { display: flex; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.tr-earlier .tr-sub { line-height: 1.35; }
+.tr-actions { display: flex; gap: 12px; margin-top: 6px; }
+.tr-actions .link { padding: 0; font-size: 13px; }
+@media (max-width: 760px) {
+  .commandbar { display: none; }
+  .mobile-bar.show-sm-flex { display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--surface); padding-bottom: env(safe-area-inset-bottom); }
+  .mb-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px 0 4px; }
+  .mb-count { flex: 1; font-weight: 600; font-size: 15px; }
+  .mb-head .link { font-size: 15px; padding: 8px; }
+  .mb-close { display: inline-grid; place-items: center; width: 44px; height: 44px; border: 0; background: none; color: inherit; border-radius: 50%; }
+  .mb-actions { display: flex; justify-content: space-around; padding: 4px 4px; }
+  .mb-actions button { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 56px; padding: 6px 2px; border: 0; background: none; color: inherit; font-size: 11.5px; border-radius: 12px; -webkit-tap-highlight-color: transparent; }
+  .mb-actions button span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .mb-actions button:active:not(:disabled) { background: var(--hover); }
+  .mb-actions button:disabled { opacity: .35; }
+  .mb-actions button.primary { color: var(--accent); font-weight: 600; }
+  .mb-actions button.danger:not(:disabled) { color: var(--danger); }
+  .mb-actions button svg { width: 22px; height: 22px; }
+  /* search: a magnifier that opens wide when tapped, so the folder path keeps its room */
+  .search { width: 40px; padding: 0 9px; margin-left: 4px; transition: width .15s; }
+  .search input::placeholder { color: transparent; }
+  .search:focus-within, .search:has(input:not(:placeholder-shown)) { width: 62%; }
+  .search:focus-within input::placeholder { color: var(--muted); }
+  .addressbar { gap: 2px; }
+  .transfers { bottom: calc(76px + env(safe-area-inset-bottom)); max-height: 55vh; overflow: auto; }
+  .transfer-bar { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .list-wrap { -webkit-touch-callout: none; }
+  .details td { font-size: 15.5px; }
+  .details th.c-size, .details td.c-size { width: 92px; }
+  .view-menu { max-height: 70vh; overflow: auto; }
+}
+@media (pointer: coarse) {
+  [data-path] { -webkit-touch-callout: none; }
+  .selecting .li, .selecting .tile, .selecting .card { position: relative; }
+  .selecting .li::after, .selecting .tile::after, .selecting .card::after {
+    content: ""; position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%;
+    border: 2px solid var(--muted); background: var(--surface); box-sizing: border-box;
+  }
+  .selecting .li.sel::after, .selecting .tile.sel::after, .selecting .card.sel::after {
+    border-color: var(--accent); background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / 13px no-repeat;
+  }
+  .selecting .li::after { top: 50%; transform: translateY(-50%); }
+}
+@media (pointer: coarse) {
+  .menu kbd { display: none; }
+  .menu-item { min-height: 44px; }
+}

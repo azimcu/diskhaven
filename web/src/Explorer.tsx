@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
   FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, LayoutList, Link2, List, MoreVertical, PanelRight, Pencil,
-  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload,
+  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X,
 } from 'lucide-react'
 
 const VIEWS = ['icons', 'list', 'details', 'tiles', 'content']
@@ -29,11 +29,12 @@ import type { DriveInfo, FileEntry } from './types'
 import { uploadFiles } from './conflicts'
 import { filesFromInput, uploadEvents } from './uploads'
 import { startTransfer } from './TransferBar'
+import { awake } from './awake'
 
 /** Cut / copied items with the drive they are on ("" = main storage). */
 export interface Clipboard { mode: 'copy' | 'cut'; paths: string[]; drive: string }
 type SortKey = 'name' | 'modified' | 'type' | 'size'
-type Menu = { x: number; y: number; onItem: boolean }
+type Menu = { x: number; y: number; onItem: boolean; above?: boolean }
 
 const coarse = () => window.matchMedia('(pointer: coarse)').matches
 const collator = new Intl.Collator('tr-TR', { numeric: true, sensitivity: 'base' })
@@ -79,13 +80,16 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   const [showHidden, setShowHiddenState] = useState(() => readPref('hv.hidden', '0') === '1')
   const setShowHidden = (v: boolean) => { setShowHiddenState(v); writePref('hv.hidden', v ? '1' : '0') }
   // the view menu opens fixed under its button: the command bar scrolls sideways and would clip a menu inside it
-  const [viewMenu, setViewMenuPos] = useState<{ top: number; right: number } | null>(null)
+  const [viewMenu, setViewMenuPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null)
   const closeViewMenu = () => setViewMenuPos(null)
   const viewBtn = useRef<HTMLButtonElement>(null)
-  const toggleViewMenu = () => {
+  const toggleViewMenu = (btn: HTMLElement | null = viewBtn.current) => {
     if (viewMenu) return setViewMenuPos(null)
-    const r = viewBtn.current?.getBoundingClientRect()
-    if (r) setViewMenuPos({ top: Math.round(r.bottom + 4), right: Math.max(8, Math.round(window.innerWidth - r.right)) })
+    const r = btn?.getBoundingClientRect()
+    if (!r) return
+    const right = Math.max(8, Math.round(window.innerWidth - r.right))
+    // a button low on the screen (the phone's bottom bar) opens the menu upwards
+    setViewMenuPos(r.top > window.innerHeight / 2 ? { bottom: Math.round(window.innerHeight - r.top + 4), right } : { top: Math.round(r.bottom + 4), right })
   }
   const basePlugins = usePlugins()
   // sharing, favourites and previous versions belong to the main storage
@@ -111,6 +115,12 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
   const longPress = useRef<number | undefined>(undefined)
+  // the click that follows a long press must not undo the selection it just made
+  const longPressed = useRef(false)
+  // phone: selection mode (long press, or "Seç" in the bottom bar); a tap then ticks items instead of opening them
+  const [selectMode, setSelectMode] = useState(false)
+  const selecting = selectMode || (coarse() && selected.size > 0)
+  const endSelect = () => { setSelectMode(false); setSelected(new Set()) }
 
   const runSearch = useCallback(async (query: string) => {
     const q = query.trim()
@@ -133,7 +143,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
       .catch(e => { setEntries([]); setError(e.message) })
   }, [path, drive, runSearch])
 
-  useEffect(() => { setEntries(null); setSelected(new Set()); setFilter(''); setRenaming(null); setResults(null) }, [path, drive])
+  useEffect(() => { setEntries(null); setSelected(new Set()); setSelectMode(false); setFilter(''); setRenaming(null); setResults(null) }, [path, drive])
   useEffect(load, [load, version])
   useEffect(() => {
     const on = (e: Event) => { const x = (e as CustomEvent<{ drive: string; path: string }>).detail; if (x.drive === drive && x.path === path) load() }
@@ -224,6 +234,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
     const gone = new Set(list.map(e => e.path))
     setEntries(l => l && l.filter(x => !gone.has(x.path)))   // disappears at once; the bin move runs behind
     setSelected(new Set())
+    setSelectMode(false)
     try {
       const r = await api.remove(list.map(e => e.path), d)
       load()
@@ -274,6 +285,8 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
     if (list.length === 0) return
     if (mode === 'cut' && ro) return toast(t.readOnlyDrive)
     setClipboard({ mode, paths: list.map(e => e.path), drive })
+    setSelectMode(false)
+    if (coarse()) setSelected(new Set())
     toast(mode === 'copy' ? `${list.length} öğe kopyalandı` : `${list.length} öğe kesildi`)
   }
 
@@ -295,7 +308,11 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
     } catch (e) { toastError(e) }
   }
 
-  const pickUpload = (folder: boolean) => (ro ? toast(t.readOnlyDrive) : (folder ? folderInput : fileInput).current?.click())
+  const pickUpload = (folder: boolean) => {
+    if (ro) return toast(t.readOnlyDrive)
+    awake.prime()   // a tap: lets the phone keep its screen on later while the files upload
+    ;(folder ? folderInput : fileInput).current?.click()
+  }
   const onPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && !ro) void uploadFiles(path, filesFromInput(e.target.files), drive)
     e.target.value = ''
@@ -303,8 +320,9 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
 
   // ---- selection --------------------------------------------------------------------------
   const clickRow = (e: React.MouseEvent, entry: FileEntry) => {
+    if (longPressed.current) { longPressed.current = false; return }
     if (coarse()) {
-      if (selected.size === 0) return open(entry)
+      if (!selecting) return open(entry)
       return setSelected(prev => { const n = new Set(prev); if (n.has(entry.path)) n.delete(entry.path); else n.add(entry.path); return n })
     }
     if (e.shiftKey && anchor) {
@@ -330,12 +348,15 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
     setMenu({ x: e.clientX, y: e.clientY, onItem: entry !== null })
   }
 
-  const touchStart = (e: React.TouchEvent, entry: FileEntry) => {
-    const touch = e.touches[0]
+  // long press = start selecting (like the phone's own Photos and Files apps); the ⋮ button opens the menu
+  const touchStart = (_e: React.TouchEvent, entry: FileEntry) => {
+    longPressed.current = false
     longPress.current = window.setTimeout(() => {
+      longPressed.current = true
+      navigator.vibrate?.(15)
+      setSelectMode(true)
       setSelected(prev => new Set([...prev, entry.path]))
-      setMenu({ x: touch.clientX, y: touch.clientY, onItem: true })
-    }, 550)
+    }, 500)
   }
   const touchEnd = () => window.clearTimeout(longPress.current)
 
@@ -418,32 +439,33 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           </label>
         )}
         <div className="view-pick">
-          <button ref={viewBtn} className="cmd" onClick={e => { e.stopPropagation(); toggleViewMenu() }} title={t.viewMode} aria-expanded={!!viewMenu} aria-haspopup="menu">
+          <button ref={viewBtn} className="cmd" onClick={e => { e.stopPropagation(); toggleViewMenu(e.currentTarget) }} title={t.viewMode} aria-expanded={!!viewMenu} aria-haspopup="menu">
             {viewIcon(view)} <span className="hide-sm">{t.viewMode}</span> <ChevronDown size={13} />
           </button>
-          {viewMenu && (
-            <>
-              <div className="menu-backdrop" onMouseDown={closeViewMenu} />
-              <div className="menu view-menu" role="menu" style={{ top: viewMenu.top, right: viewMenu.right }} onClick={closeViewMenu}>
-                {ICON_PRESETS.map(p => {
-                  const on = view === 'icons' && iconSize === p.size
-                  return <button key={p.size} className="menu-item" role="menuitemradio" aria-checked={on} onClick={() => { setIconSize(p.size); setView('icons') }}>
-                    <span className="menu-ic">{on ? <Check size={15} /> : <LayoutGrid size={p.glyph} />}</span>{p.label}</button>
-                })}
-                <div className="menu-sep" />
-                {([['list', t.viewList], ['details', t.viewDetails], ['tiles', t.viewTiles], ['content', t.viewContent]] as const).map(([v, label]) =>
-                  <button key={v} className="menu-item" role="menuitemradio" aria-checked={view === v} onClick={() => setView(v)}>
-                    <span className="menu-ic">{view === v ? <Check size={15} /> : viewIcon(v)}</span>{label}</button>)}
-                <div className="menu-sep" />
-                <div className="menu-slider show-sm-flex"><LayoutGrid size={12} /><input type="range" min={32} max={256} step={4} value={iconSize}
-                  onClick={e => e.stopPropagation()} onChange={e => { setIconSize(Number(e.target.value)); if (view !== 'icons') setView('icons') }} aria-label={t.iconSize} /><LayoutGrid size={17} /></div>
-                <button className="menu-item" onClick={() => setShowHidden(!showHidden)}><span className="menu-ic">{showHidden ? <Check size={15} /> : <Eye size={16} />}</span>{t.showHidden}</button>
-              </div>
-            </>
-          )}
         </div>
         <button className={`cmd icon-only hide-sm ${pane ? 'on' : ''}`} onClick={() => { setPane(!pane); writePref('hv.pane', pane ? '0' : '1') }} title={t.previewPane}><PanelRight size={16} /></button>
       </div>
+
+      {viewMenu && (
+        <>
+          <div className="menu-backdrop" onMouseDown={closeViewMenu} />
+          <div className="menu view-menu" role="menu" style={{ top: viewMenu.top, bottom: viewMenu.bottom, right: viewMenu.right }} onClick={closeViewMenu}>
+            {ICON_PRESETS.map(p => {
+              const on = view === 'icons' && iconSize === p.size
+              return <button key={p.size} className="menu-item" role="menuitemradio" aria-checked={on} onClick={() => { setIconSize(p.size); setView('icons') }}>
+                <span className="menu-ic">{on ? <Check size={15} /> : <LayoutGrid size={p.glyph} />}</span>{p.label}</button>
+            })}
+            <div className="menu-sep" />
+            {([['list', t.viewList], ['details', t.viewDetails], ['tiles', t.viewTiles], ['content', t.viewContent]] as const).map(([v, label]) =>
+              <button key={v} className="menu-item" role="menuitemradio" aria-checked={view === v} onClick={() => setView(v)}>
+                <span className="menu-ic">{view === v ? <Check size={15} /> : viewIcon(v)}</span>{label}</button>)}
+            <div className="menu-sep" />
+            <div className="menu-slider show-sm-flex"><LayoutGrid size={12} /><input type="range" min={32} max={256} step={4} value={iconSize}
+              onClick={e => e.stopPropagation()} onChange={e => { setIconSize(Number(e.target.value)); if (view !== 'icons') setView('icons') }} aria-label={t.iconSize} /><LayoutGrid size={17} /></div>
+            <button className="menu-item" onClick={() => setShowHidden(!showHidden)}><span className="menu-ic">{showHidden ? <Check size={15} /> : <Eye size={16} />}</span>{t.showHidden}</button>
+          </div>
+        </>
+      )}
 
       <div className="addressbar">
         <button className="icon-btn" onClick={() => history.back()} title={`${t.back} (Alt+←)`}><ArrowLeft size={16} /></button>
@@ -489,7 +511,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
       <div className="content">
         <div
           ref={listRef}
-          className={`list-wrap ${dragOver ? 'dragover' : ''}`}
+          className={`list-wrap ${dragOver ? 'dragover' : ''} ${selecting ? 'selecting' : ''}`}
           tabIndex={0}
           onKeyDown={onKey}
           style={{ '--tile': `${iconSize}px` } as React.CSSProperties}
@@ -522,10 +544,10 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
               </thead>
               <tbody>
                 {shown.map(e => (
-                  <Row key={e.path} entry={e} selected={selected.has(e.path)} cut={(clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)) || e.hidden}
+                  <Row key={e.path} entry={e} selected={selected.has(e.path)} selecting={selecting} cut={(clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)) || e.hidden}
                     location={results ? parentOf(e.path) : undefined}
                     renaming={renaming === e.path} onRename={v => commitRename(e, v)} onCancelRename={() => setRenaming(null)}
-                    onClick={ev => clickRow(ev, e)} onDoubleClick={() => open(e)} onContextMenu={ev => contextRow(ev, e)}
+                    onClick={ev => clickRow(ev, e)} onDoubleClick={() => { if (!coarse()) open(e) }} onContextMenu={ev => contextRow(ev, e)}
                     onDragStart={ev => dragStart(ev, e)} onDropItems={onDropItems}
                     onTouchStart={ev => touchStart(ev, e)} onTouchEnd={touchEnd}
                     onMore={ev => { ev.stopPropagation(); const r = (ev.currentTarget as HTMLElement).getBoundingClientRect(); contextRow({ clientX: r.left, clientY: r.bottom, preventDefault() {} }, e) }} />
@@ -543,7 +565,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
                   onDragOver={ev => { if (e.kind === 'Folder') { ev.preventDefault(); ev.currentTarget.classList.add('drop') } }}
                   onDragLeave={ev => ev.currentTarget.classList.remove('drop')}
                   onDrop={ev => { ev.currentTarget.classList.remove('drop'); if (e.kind === 'Folder') { ev.stopPropagation(); onDropItems(e.path, ev) } }}
-                  onClick={ev => clickRow(ev, e)} onDoubleClick={() => open(e)} onContextMenu={ev => contextRow(ev, e)}
+                  onClick={ev => clickRow(ev, e)} onDoubleClick={() => { if (!coarse()) open(e) }} onContextMenu={ev => contextRow(ev, e)}
                   onTouchStart={ev => touchStart(ev, e)} onTouchEnd={touchEnd} onTouchMove={touchEnd}>
                   <FileIcon entry={e} />
                   {renaming === e.path
@@ -563,7 +585,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
                   onDragOver={ev => { if (e.kind === 'Folder') { ev.preventDefault(); ev.currentTarget.classList.add('drop') } }}
                   onDragLeave={ev => ev.currentTarget.classList.remove('drop')}
                   onDrop={ev => { ev.currentTarget.classList.remove('drop'); if (e.kind === 'Folder') { ev.stopPropagation(); onDropItems(e.path, ev) } }}
-                  onClick={ev => clickRow(ev, e)} onDoubleClick={() => open(e)} onContextMenu={ev => contextRow(ev, e)}
+                  onClick={ev => clickRow(ev, e)} onDoubleClick={() => { if (!coarse()) open(e) }} onContextMenu={ev => contextRow(ev, e)}
                   onTouchStart={ev => touchStart(ev, e)} onTouchEnd={touchEnd} onTouchMove={touchEnd}>
                   <Thumb entry={e} size={iconSize} />
                   {renaming === e.path
@@ -583,7 +605,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
                   onDragOver={ev => { if (e.kind === 'Folder') { ev.preventDefault(); ev.currentTarget.classList.add('drop') } }}
                   onDragLeave={ev => ev.currentTarget.classList.remove('drop')}
                   onDrop={ev => { ev.currentTarget.classList.remove('drop'); if (e.kind === 'Folder') { ev.stopPropagation(); onDropItems(e.path, ev) } }}
-                  onClick={ev => clickRow(ev, e)} onDoubleClick={() => open(e)} onContextMenu={ev => contextRow(ev, e)}
+                  onClick={ev => clickRow(ev, e)} onDoubleClick={() => { if (!coarse()) open(e) }} onContextMenu={ev => contextRow(ev, e)}
                   onTouchStart={ev => touchStart(ev, e)} onTouchEnd={touchEnd} onTouchMove={touchEnd}>
                   <Thumb entry={e} size={view === 'tiles' ? 48 : 40} />
                   <div className="card-text">
@@ -607,7 +629,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
         {pane && <PreviewPane entry={single} count={sel.length} />}
       </div>
 
-      <footer className="statusbar">
+      <footer className="statusbar hide-sm">
         <span>{t.items(shown.length)}</span>
         {sel.length > 0 && <span>{t.selected(sel.length)}{selectedSize > 0 ? ` · ${formatSize(selectedSize)}` : ''}</span>}
         <span className="grow" />
@@ -615,8 +637,37 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
         {space && <span className="hide-sm">{t.free(formatSize(space.free), formatSize(space.total))}</span>}
       </footer>
 
+      <nav className="mobile-bar show-sm-flex" aria-label="İşlemler">
+        {selecting ? (
+          <>
+            <div className="mb-head">
+              <button className="mb-close" onClick={endSelect} aria-label="Seçimi bitir"><X size={20} /></button>
+              <span className="mb-count">{sel.length ? `${t.selected(sel.length)}${selectedSize > 0 ? ` · ${formatSize(selectedSize)}` : ''}` : 'Öğelere dokunarak seç'}</span>
+              <button className="link" onClick={() => setSelected(sel.length === shown.length ? new Set() : new Set(shown.map(x => x.path)))}>
+                {sel.length === shown.length && shown.length > 0 ? 'Hiçbiri' : 'Tümü'}</button>
+            </div>
+            <div className="mb-actions">
+              <button disabled={!sel.length} onClick={() => toClipboard('copy', sel)}><Copy size={22} /><span>{t.copy}</span></button>
+              <button disabled={!sel.length || ro} onClick={() => toClipboard('cut', sel)}><Scissors size={22} /><span>Taşı</span></button>
+              <button disabled={!sel.some(e => e.kind === 'File') && !(plugins.has('archive') && sel.length > 0)} onClick={() => download(sel)}><Download size={22} /><span>{t.download}</span></button>
+              <button disabled={!sel.length || ro} className="danger" onClick={() => remove(sel)}><Trash2 size={22} /><span>{t.delete}</span></button>
+              <button disabled={!sel.length} onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.right, y: r.top, onItem: true, above: true }) }}><MoreVertical size={22} /><span>Diğer</span></button>
+            </div>
+          </>
+        ) : (
+          <div className="mb-actions">
+            <button className="primary" disabled={ro} onClick={() => pickUpload(false)}><Upload size={22} /><span>{t.upload}</span></button>
+            <button disabled={ro} onClick={newFolder}><FolderPlus size={22} /><span>Klasör</span></button>
+            {clipboard && <button disabled={ro} onClick={paste}><ClipboardPaste size={22} /><span>{t.paste}</span></button>}
+            <button disabled={shown.length === 0} onClick={() => setSelectMode(true)}><CheckSquare size={22} /><span>Seç</span></button>
+            <button onClick={e => { e.stopPropagation(); toggleViewMenu(e.currentTarget) }}>{viewIcon(view)}<span>Görünüm</span></button>
+            <button onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.right, y: r.top, onItem: false, above: true }) }}><MoreVertical size={22} /><span>Diğer</span></button>
+          </div>
+        )}
+      </nav>
+
       {menu && (
-        <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={menu.onItem ? [
+        <ContextMenu above={menu.above} x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={menu.onItem ? [
           single && { label: single.kind === 'Folder' ? t.open : previewKind(single.extension) ? t.open : t.download, icon: <FolderOpen size={16} />, run: () => open(single) },
           !ro && plugins.has('archive') && single?.extension === 'zip' && { label: t.extract, icon: <FolderInput size={16} />, run: () => extract(single) },
           (plugins.has('archive') || sel.every(e => e.kind === 'File')) && { label: sel.length === 1 && single?.kind === 'File' || !plugins.has('archive') ? t.download : t.downloadZip, icon: <Download size={16} />, run: () => download(sel) },
@@ -644,6 +695,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           'sep',
           !ro && { label: t.uploadFiles, icon: <Upload size={16} />, run: () => pickUpload(false) },
           !ro && { label: t.uploadFolder, icon: <FolderUp size={16} />, run: () => pickUpload(true) },
+          onDisk && !ro && { label: t.diskTrash(rootName), icon: <Trash2 size={16} />, run: () => { location.hash = `#/trash/${encodeURIComponent(drive)}` } },
           'sep',
           { label: t.refresh, icon: <RefreshCw size={16} />, hint: 'F5', run: load },
           { label: t.selectAll, hint: 'Ctrl+A', run: () => setSelected(new Set(shown.map(x => x.path))) },
@@ -662,6 +714,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
 
 interface RowProps {
   entry: FileEntry
+  selecting?: boolean
   location?: string
   selected: boolean
   cut: boolean
@@ -702,7 +755,9 @@ function Row(p: RowProps) {
       <td className="c-size" title={folder && e.files != null ? t.contents(e.files, e.folders ?? 0) : undefined}>
         {folder && e.size == null ? (e.drive ? '' : <span className="calc">{t.calculating}</span>) : formatSize(e.size)}
       </td>
-      <td className="c-more"><button className="icon-btn" onClick={p.onMore} aria-label="Diğer"><MoreVertical size={16} /></button></td>
+      <td className="c-more">{p.selecting
+        ? <span className="check" aria-hidden>{p.selected ? <CheckCircle2 size={22} /> : <Circle size={22} />}</span>
+        : <button className="icon-btn" onClick={p.onMore} aria-label="Diğer"><MoreVertical size={16} /></button>}</td>
     </tr>
   )
 }
@@ -740,17 +795,18 @@ function Thumb({ entry, size }: { entry: FileEntry; size: number }) {
 
 export type MenuItem = { label: string; icon?: React.ReactNode; hint?: string; run: () => void } | 'sep' | false | null | undefined
 
-export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+export function ContextMenu({ x, y, items, onClose, above }: { x: number; y: number; items: MenuItem[]; onClose: () => void; above?: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: x, top: y })
   useEffect(() => {
     const r = ref.current!.getBoundingClientRect()
-    setPos({ left: Math.max(4, Math.min(x, innerWidth - r.width - 4)), top: Math.max(4, Math.min(y, innerHeight - r.height - 4)) })
+    const top = above ? y - r.height - 6 : y
+    setPos({ left: Math.max(4, Math.min(above ? x - r.width : x, innerWidth - r.width - 4)), top: Math.max(4, Math.min(top, innerHeight - r.height - 4)) })
     const close = () => onClose()
     window.addEventListener('blur', close)
     window.addEventListener('resize', close)
     return () => { window.removeEventListener('blur', close); window.removeEventListener('resize', close) }
-  }, [x, y, onClose])
+  }, [x, y, onClose, above])
   // drop leading/trailing/double separators left over from hidden items
   const clean = items.filter(Boolean).filter((it, i, arr) => it !== 'sep' || (i > 0 && i < arr.length - 1 && arr[i - 1] !== 'sep'))
   return (

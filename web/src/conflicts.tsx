@@ -1,7 +1,7 @@
 import { api } from './api'
 import { Modal, mount } from './dialogs'
 import { hasPlugin } from './plugins'
-import { uploads } from './uploads'
+import { splitIdentical, uploads } from './uploads'
 
 type Picked = { file: File; relativeName: string }
 type Choice = 'replace' | 'both' | 'skip' | null
@@ -11,8 +11,12 @@ type Choice = 'replace' | 'both' | 'skip' | null
  * have the name of a file already there, ask once for all of them. Files inside dropped folders and uploads
  * into the hidden folder are never asked about (they keep both, as before).
  */
-export async function uploadFiles(destination: string, files: Picked[], drive = '') {
-  if (files.length === 0) return
+export async function uploadFiles(destination: string, picked: Picked[], drive = '') {
+  if (picked.length === 0) return
+  // the very same file (same name and size) already there: skipped without asking, so picking the same
+  // photos again after an interrupted upload only sends the missing ones
+  const { send: files, same } = await splitIdentical(destination, picked, drive)
+  if (files.length === 0) return uploads.add(destination, [], drive, same)
   let taken = new Set<string>()
   if (!destination.startsWith('hideaway:')) {
     try {
@@ -21,14 +25,14 @@ export async function uploadFiles(destination: string, files: Picked[], drive = 
     } catch { /* cannot list: just upload, the server keeps both */ }
   }
   const clashes = files.filter(f => !f.relativeName.includes('/') && taken.has(f.relativeName.toLocaleLowerCase('tr-TR')))
-  if (clashes.length === 0) return uploads.add(destination, files, drive)
+  if (clashes.length === 0) return uploads.add(destination, files, drive, same)
 
   const choice = await mount<Choice>(done => <ReplaceDialog names={clashes.map(c => c.relativeName)} total={files.length} done={done} onDisk={!!drive} />)
   if (choice === null) return
   const clashing = new Set(clashes)
   uploads.add(destination, files
     .filter(f => choice !== 'skip' || !clashing.has(f))
-    .map(f => ({ ...f, replace: choice === 'replace' && clashing.has(f) })), drive)
+    .map(f => ({ ...f, replace: choice === 'replace' && clashing.has(f) })), drive, same)
 }
 
 function ReplaceDialog({ names, total, done, onDisk }: { names: string[]; total: number; done: (c: Choice) => void; onDisk: boolean }) {

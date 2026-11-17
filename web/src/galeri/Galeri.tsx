@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import { filesFromInput, uploads } from '../uploads'
+import { filesFromInput, splitIdentical, uploads } from '../uploads'
+import { awake } from '../awake'
 import { albumTitle, gapi, nameOf, parentOf, type AlbumInfo, type Media } from './gapi'
 import { Grid, useMedia } from './Grid'
 import { openSettings, openTrash, pickAlbum, UploadStrip } from './Sheets'
@@ -298,14 +299,24 @@ function AlbumScreen({ path, version, onBack, onOpen, onRenamed, del, moveCopy, 
             <button className="g-icon-btn" onClick={() => setMenu(true)} aria-label="Albüm menüsü"><Icon name="more" /></button>
           </header>
         )} />
-      <button className="g-fab" onClick={() => input.current?.click()} aria-label="Fotoğraf ekle"><Icon name="upload" /></button>
+      <button className="g-fab" onClick={() => { awake.prime(); input.current?.click() }} aria-label="Fotoğraf ekle"><Icon name="upload" /></button>
       <input ref={input} type="file" accept="image/*,video/*" multiple hidden
-        onChange={e => { if (e.target.files?.length) { uploads.add(path, filesFromInput(e.target.files)); toast(`${e.target.files.length} dosya yükleniyor…`) } e.target.value = '' }} />
+        onChange={e => {
+          const picked = e.target.files?.length ? filesFromInput(e.target.files) : []
+          e.target.value = ''
+          if (!picked.length) return
+          // photos already in the album (same name and size) are skipped: picking the same ones again after
+          // an interruption only sends the missing ones
+          void splitIdentical(path, picked, '', true).then(({ send, same }) => {
+            uploads.add(path, send, '', same)
+            toast(!send.length ? `${same.length} dosya zaten albümde, yeniden yüklenmedi` : same.length ? `${send.length} dosya yükleniyor, ${same.length} dosya zaten vardı` : `${send.length} dosya yükleniyor…`)
+          })
+        }} />
       <UploadStrip onFinished={() => changed()} />
       {menu && (
         <div className="g-scrim clear" onClick={() => setMenu(false)}>
           <div className="g-menu" onClick={e => e.stopPropagation()}>
-            <button onClick={() => { setMenu(false); input.current?.click() }}><Icon name="upload" size={20} />Fotoğraf / video ekle</button>
+            <button onClick={() => { setMenu(false); awake.prime(); input.current?.click() }}><Icon name="upload" size={20} />Fotoğraf / video ekle</button>
             <button onClick={() => setFlag('pinned', !info?.pinned)}><Icon name="pin" size={20} />{info?.pinned ? 'Sabitlemeyi kaldır' : 'Albümü sabitle'}</button>
             <button onClick={() => setFlag('hidden', !info?.hidden)}><Icon name={info?.hidden ? 'show' : 'hide'} size={20} />{info?.hidden ? 'Albümü göster' : 'Albümü gizle'}</button>
             {path !== '' && <button onClick={rename}><Icon name="rename" size={20} />Yeniden adlandır</button>}

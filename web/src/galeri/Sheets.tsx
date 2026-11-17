@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { api } from '../api'
 import type { FileEntry, TrashItem } from '../types'
-import { isActive, uploads } from '../uploads'
+import { isActive, isDone, uploads } from '../uploads'
 import { albumTitle, gapi, nameOf, parentOf, type AlbumInfo } from './gapi'
 import { Icon, promptSheet, sheet, toast, toastError } from './ui'
 
@@ -217,11 +217,11 @@ export function UploadStrip({ onFinished }: { onFinished: () => void }) {
     }
   }, [active.length]) // eslint-disable-line react-hooks/exhaustive-deps
   if (active.length === 0) return null
-  const doneCount = snap.items.filter(i => i.status === 'done').length
+  const doneCount = snap.items.filter(i => isDone(i.status)).length
   const progress = snap.items.length ? (doneCount + active.reduce((s, i) => s + (i.status === 'uploading' ? i.progress : 0), 0)) / snap.items.length : 0
   return (
     <div className="g-upload">
-      <span>Yükleniyor: {doneCount}/{snap.items.length}</span>
+      <span>{active.some(i => i.status === 'waiting') ? 'Bağlantı bekleniyor' : 'Yükleniyor'}: {doneCount}/{snap.items.length}</span>
       <div className="g-bar"><div style={{ width: `${Math.round(progress * 100)}%` }} /></div>
     </div>
   )
