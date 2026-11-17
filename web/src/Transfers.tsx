@@ -16,6 +16,15 @@ const stageText: Record<UploadItem['status'], string> = {
   canceled: 'İptal edildi',
 }
 
+// The phone's bottom bar has an "İşlemler" button that hides and shows this panel.
+let panelHidden = false
+const panelSubs = new Set<() => void>()
+export const transfersPanel = {
+  get hidden() { return panelHidden },
+  set(hidden: boolean) { if (hidden !== panelHidden) { panelHidden = hidden; panelSubs.forEach(f => f()) } },
+  subscribe(f: () => void) { panelSubs.add(f); return () => { panelSubs.delete(f) } },
+}
+
 /** Bottom-right panel listing upload batches with a verified/total summary per batch. */
 export function Transfers() {
   const { items, batches } = useSyncExternalStore(uploads.subscribe, uploads.getSnapshot)
@@ -36,9 +45,13 @@ export function Transfers() {
     return () => window.removeEventListener('beforeunload', warn)
   }, [])
 
+  const hidden = useSyncExternalStore(transfersPanel.subscribe, () => transfersPanel.hidden)
+  // a new upload always shows the panel again
+  useEffect(() => { if (batches.length) transfersPanel.set(false) }, [batches.length])
+
   const forget = () => { uploads.forgetUnfinished(); setEarlier([]) }
   const leftover = earlier.filter(u => !items.some(i => i.destination === u.destination && i.drive === u.drive))
-  if (batches.length === 0 && leftover.length === 0) return null
+  if ((batches.length === 0 && leftover.length === 0) || hidden) return null
   const active = items.filter(i => isActive(i.status)).length
   const waiting = items.some(i => i.status === 'waiting')
 

@@ -143,7 +143,7 @@ export function App() {
     <div className="app">
       {auth.demo && <div className="demo-bar" role="note">Demo: değişiklikler her saat başı sıfırlanır · dosya başına en fazla 20 MB · disk ve hesap ayarları kapalı</div>}
       <header className="titlebar">
-        <button className="icon-btn show-sm" onClick={() => setDrawer(d => !d)} aria-label="Klasörler"><MenuIcon size={18} /></button>
+        <button className="icon-btn show-sm burger" onClick={() => setDrawer(d => !d)} aria-label="Klasörler"><MenuIcon size={24} /></button>
         <img src="/icon.svg" width={20} height={20} alt="" />
         <span className="brand">{t.appName}</span>
         <span className="grow" />

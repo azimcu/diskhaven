@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
   FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, LayoutList, Link2, List, MoreVertical, PanelRight, Pencil,
-  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X,
+  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X, ArrowUpDown, CheckCheck,
 } from 'lucide-react'
 
 const VIEWS = ['icons', 'list', 'details', 'tiles', 'content']
@@ -13,9 +13,9 @@ const ICON_PRESETS = [
   { size: 96, glyph: 16, label: t.viewIconsM },
   { size: 48, glyph: 14, label: t.viewIconsS },
 ]
-const viewIcon = (v: string) =>
-  v === 'icons' ? <LayoutGrid size={16} /> : v === 'list' ? <Rows3 size={16} /> : v === 'tiles' ? <SquareStack size={16} />
-    : v === 'content' ? <LayoutList size={16} /> : <List size={16} />
+const viewIcon = (v: string, size = 16) =>
+  v === 'icons' ? <LayoutGrid size={size} /> : v === 'list' ? <Rows3 size={size} /> : v === 'tiles' ? <SquareStack size={size} />
+    : v === 'content' ? <LayoutList size={size} /> : <List size={size} />
 import { api } from './api'
 import { toast, toastError } from './dialogs'
 import { FileIcon } from './FileIcon'
@@ -28,7 +28,8 @@ import { hasPlugin, usePlugins } from './plugins'
 import { t } from './strings'
 import type { DriveInfo, FileEntry } from './types'
 import { uploadFiles } from './conflicts'
-import { filesFromInput, uploadEvents } from './uploads'
+import { filesFromInput, isActive, uploadEvents, uploads } from './uploads'
+import { transfersPanel } from './Transfers'
 import { startTransfer } from './TransferBar'
 import { awake } from './awake'
 
@@ -120,6 +121,10 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   const longPressed = useRef(false)
   // phone: selection mode (long press, or "Seç" in the bottom bar); a tap then ticks items instead of opening them
   const [selectMode, setSelectMode] = useState(false)
+  const [phoneMore, setPhoneMore] = useState<{ x: number; y: number } | null>(null)
+  const upl = useSyncExternalStore(uploads.subscribe, uploads.getSnapshot)
+  const busy = upl.items.filter(i => isActive(i.status)).length
+  const hasTransfers = upl.batches.length > 0 || uploads.unfinished().length > 0
   const selecting = selectMode || (coarse() && selected.size > 0)
   const endSelect = () => { setSelectMode(false); setSelected(new Set()) }
 
@@ -205,6 +210,10 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
     }
   }
 
+  // on a phone, a selection switches the bottom bar to selection mode; a new or renamed item only stays
+  // selected there when the user was already selecting, otherwise the next tap would tick instead of open
+  const markNew = (p: string) => setSelected(coarse() && !selectMode ? new Set() : new Set([p]))
+
   const newFolder = async () => {
     if (ro) return toast(t.readOnlyDrive)
     const name = uniqueName((entries ?? []).map(e => e.name), t.newFolder)
@@ -212,7 +221,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
       const r = await api.createFolder(path, name, d)
       load()
       changed()
-      setSelected(new Set([r.path]))
+      markNew(r.path)
       setRenaming(r.path)
     } catch (e) { toastError(e) }
   }
@@ -224,10 +233,10 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
     // shown with the new name at once; the server confirms (or the list is reloaded on error)
     const guess = (parentOf(entry.path) ? parentOf(entry.path) + '/' : '') + name
     setEntries(list => list && list.map(x => x.path === entry.path ? { ...x, name, path: guess, extension: x.kind === 'File' ? (name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : null) : null } : x))
-    setSelected(new Set([guess]))
+    markNew(guess)
     try {
       const r = await api.rename(entry.path, name, d)
-      setSelected(new Set([r.path]))
+      markNew(r.path)
       load()
       changed()
     } catch (e) { toastError(e); load() }
@@ -451,6 +460,15 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
         <button className={`cmd icon-only hide-sm ${pane ? 'on' : ''}`} onClick={() => { setPane(!pane); writePref('hv.pane', pane ? '0' : '1') }} title={t.previewPane}><PanelRight size={16} /></button>
       </div>
 
+      {/* phone only: a second row under the title bar, buttons from the right: view, select, new folder, refresh */}
+      <div className="phone-tools show-sm-flex" role="toolbar" aria-label="Klasör araçları">
+        <button className="pt-btn" onClick={load} title={t.refresh} aria-label={t.refresh}><RefreshCw size={22} /></button>
+        <button className="pt-btn" disabled={ro} onClick={newFolder} title={t.newFolder} aria-label={t.newFolder}><FolderPlus size={22} /></button>
+        <button className={`pt-btn ${selecting ? 'on' : ''}`} disabled={shown.length === 0} onClick={() => (selecting ? endSelect() : setSelectMode(true))} title="Seç" aria-label="Seç" aria-pressed={selecting}><CheckSquare size={22} /></button>
+        <button className="pt-btn" onClick={e => { e.stopPropagation(); toggleViewMenu(e.currentTarget) }} title={t.viewMode} aria-label={t.viewMode} aria-haspopup="menu">
+          {viewIcon(view, 22)}</button>
+      </div>
+
       {viewMenu && (
         <>
           <div className="menu-backdrop" onMouseDown={closeViewMenu} />
@@ -661,12 +679,12 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           </>
         ) : (
           <div className="mb-actions">
-            <button className="primary" disabled={ro} onClick={() => pickUpload(false)}><Upload size={22} /><span>{t.upload}</span></button>
-            <button disabled={ro} onClick={newFolder}><FolderPlus size={22} /><span>Klasör</span></button>
-            {clipboard && <button disabled={ro} onClick={paste}><ClipboardPaste size={22} /><span>{t.paste}</span></button>}
+            <button onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setPhoneMore(m => m ? null : { x: r.left, y: r.top }) }}><MoreVertical size={22} /><span>Diğer</span></button>
+            <button className={`mb-transfers ${busy > 0 ? 'busy' : ''}`} disabled={!hasTransfers} onClick={() => transfersPanel.set(!transfersPanel.hidden)}>
+              <ArrowUpDown size={22} />{busy > 0 && <b className="mb-badge">{busy}</b>}<span>İşlemler</span></button>
             <button disabled={shown.length === 0} onClick={() => setSelectMode(true)}><CheckSquare size={22} /><span>Seç</span></button>
-            <button onClick={e => { e.stopPropagation(); toggleViewMenu(e.currentTarget) }}>{viewIcon(view)}<span>Görünüm</span></button>
-            <button onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.right, y: r.top, onItem: false, above: true }) }}><MoreVertical size={22} /><span>Diğer</span></button>
+            <button onClick={() => history.back()}><ArrowLeft size={22} /><span>{t.back}</span></button>
+            <button className="primary" disabled={ro} onClick={() => pickUpload(false)}><Upload size={22} /><span>{t.upload}</span></button>
           </div>
         )}
       </nav>
@@ -705,6 +723,15 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           { label: t.refresh, icon: <RefreshCw size={16} />, hint: 'F5', run: load },
           { label: t.selectAll, hint: 'Ctrl+A', run: () => setSelected(new Set(shown.map(x => x.path))) },
           { label: t.showHidden, icon: showHidden ? <Check size={15} /> : <Eye size={16} />, run: () => setShowHidden(!showHidden) },
+        ]} />
+      )}
+
+      {phoneMore && (
+        <ContextMenu above x={phoneMore.x} y={phoneMore.y} onClose={() => setPhoneMore(null)} items={[
+          !ro && clipboard && { label: t.paste, icon: <ClipboardPaste size={16} />, run: paste },
+          !ro && { label: t.newFolder, icon: <FolderPlus size={16} />, run: newFolder },
+          { label: t.refresh, icon: <RefreshCw size={16} />, run: load },
+          shown.length > 0 && { label: t.selectAll, icon: <CheckCheck size={16} />, run: () => { setSelectMode(true); setSelected(new Set(shown.map(x => x.path))) } },
         ]} />
       )}
 
