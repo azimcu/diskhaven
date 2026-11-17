@@ -118,7 +118,8 @@ public sealed class Thumbnails
     private async Task<string?> MakeAsync(string full, string variant, CancellationToken ct)
     {
         var info = new FileInfo(full);
-        if (!info.Exists)
+        // a FIFO / device named .jpg would block the header read below forever: only regular files get a preview
+        if (!info.Exists || SpecialFiles.IsSpecial(full))
             return null;
         var key = Convert.ToHexStringLower(SHA1.HashData(Encoding.UTF8.GetBytes($"{full}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{variant}")));
         var target = Path.Combine(_cache, key[..2], key + ".jpg");
@@ -154,6 +155,8 @@ public sealed class Thumbnails
     /// MP4/MOV/3GP (ISO BMFF), Matroska/WebM, AVI for videos.</summary>
     public static bool LooksLikeMedia(string full, bool video)
     {
+        if (SpecialFiles.IsSpecial(full))
+            return false;   // a FIFO or device named .jpg would block the read below forever
         var h = new byte[16];
         int n;
         try { using var f = File.OpenRead(full); n = f.ReadAtLeast(h, 16, throwOnEndOfStream: false); }

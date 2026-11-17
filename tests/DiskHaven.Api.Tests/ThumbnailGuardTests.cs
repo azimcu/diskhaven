@@ -35,4 +35,21 @@ public sealed class ThumbnailGuardTests : IDisposable
         Assert.False(Thumbnails.LooksLikeMedia(File("x.mp4", [0xFF, 0xD8, 0xFF, 0xE0]), video: true));
         Assert.False(Thumbnails.LooksLikeMedia(File("x.jpg", [0x1A, 0x45, 0xDF, 0xA3]), video: false));
     }
+
+    [Fact]
+    public async Task A_fifo_named_like_a_photo_gets_no_preview_and_does_not_hang()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        var fifo = Path.Combine(_dir, "pipe.jpg");
+        using (var p = System.Diagnostics.Process.Start("mkfifo", [fifo]))
+            await p!.WaitForExitAsync(TestContext.Current.CancellationToken);
+        var check = Task.Run(() => Thumbnails.LooksLikeMedia(fifo, video: false), TestContext.Current.CancellationToken);
+        var done = await Task.WhenAny(check, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Assert.Same(check, done);   // answered at once instead of blocking on the pipe
+        Assert.False(await check);
+        var thumbs = new Thumbnails(_dir, Microsoft.Extensions.Logging.Abstractions.NullLogger<Thumbnails>.Instance);
+        Assert.Null(await thumbs.GetAsync(fifo, "s", TestContext.Current.CancellationToken));
+        Assert.Equal(0, thumbs.Warm([fifo]));
+    }
 }
