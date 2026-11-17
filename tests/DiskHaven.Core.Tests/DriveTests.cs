@@ -342,6 +342,7 @@ public sealed class DriveTests : IDisposable
     [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task Unreadable_folder_is_reported_and_everything_else_is_copied()
     {
+        Assert.SkipWhen(Environment.IsPrivilegedProcess, "root (CI) reads every file: an unreadable file cannot be made");
         Directory.CreateDirectory(A("Fotoğraflar/kilitli"));
         File.WriteAllText(A("Fotoğraflar/kilitli/gizli.txt"), "x");
         File.SetUnixFileMode(A("Fotoğraflar/kilitli"), UnixFileMode.None);
@@ -361,6 +362,7 @@ public sealed class DriveTests : IDisposable
     [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task Unreadable_file_is_reported_and_the_rest_copied()
     {
+        Assert.SkipWhen(Environment.IsPrivilegedProcess, "root (CI) reads every file: an unreadable file cannot be made");
         File.WriteAllText(A("Fotoğraflar/okunamaz.txt"), "x");
         File.SetUnixFileMode(A("Fotoğraflar/okunamaz.txt"), UnixFileMode.None);
         var r = await Run(["Fotoğraflar"], "Hedef", move: false);
@@ -400,12 +402,19 @@ public sealed class DriveTests : IDisposable
     }
 
     /// <summary>Creates a file whose name is not valid UTF-8 (ISO-8859-9 bytes), as old systems left them. .NET cannot.</summary>
+    // a file name in an old 8-bit code page (Turkish 'ş' = 0xFE), as copied from an old Windows disk; .NET strings cannot
+    // express it, so the name is passed to the kernel as raw bytes (no python3 needed: the CI image does not have it)
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int open(byte[] path, int flags, int mode);
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern int close(int fd);
+
     private static void MakeLatin5File(string folder)
     {
-        using var p = System.Diagnostics.Process.Start("python3", ["-c",
-            "import os,sys; open(os.path.join(os.fsencode(sys.argv[1]), b'eski \\xfeirket.txt'), 'wb').write(b'x')", folder])!;
-        p.WaitForExit();
-        Assert.Equal(0, p.ExitCode);
+        byte[] name = [.. System.Text.Encoding.UTF8.GetBytes(folder + "/eski "), 0xFE, .. "irket.txt"u8, 0];
+        var fd = open(name, 0x41 /* O_WRONLY | O_CREAT */, 0x1A4 /* 0644 */);
+        Assert.True(fd >= 0, $"open failed: errno {System.Runtime.InteropServices.Marshal.GetLastPInvokeError()}");
+        close(fd);
     }
 
     [Fact]
