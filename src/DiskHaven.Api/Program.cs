@@ -52,6 +52,8 @@ builder.Services.AddHostedService<GalleryScanner>();
 builder.Services.AddHostedService<ThumbnailWarmer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SystemStats>());
 builder.Services.AddSingleton(new AccountStore(configDir));
+builder.Services.AddSingleton(new PermissionStore(configDir));
+builder.Services.AddSingleton<Access>();
 builder.Services.AddSingleton(new ShareStore(configDir));
 builder.Services.AddSingleton(tusStore);
 builder.Services.AddHostedService<Housekeeping>();
@@ -111,9 +113,10 @@ builder.Services.AddAuthorizationBuilder().AddPolicy("admin", p => p.RequireRole
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    var loginsPerMinute = builder.Configuration.GetValue("DiskHaven:LoginAttemptsPerMinute", 5);
     o.AddPolicy("login", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(1) }));
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = loginsPerMinute, Window = TimeSpan.FromMinutes(1) }));
     // share links are public: limit how fast one address can try tokens or pull files
     o.AddPolicy("public", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
@@ -172,6 +175,7 @@ auth.MapGet("/state", (HttpContext ctx, AccountStore accounts) => Results.Ok(new
     setupRequired = !accounts.HasAccounts,
     user = ctx.User.Identity?.IsAuthenticated == true ? ctx.User.Identity.Name : null,
     isAdmin = ctx.User.IsInRole("admin"),
+    role = ctx.User.Identity?.IsAuthenticated == true ? (ctx.User.IsInRole("admin") ? "admin" : "user") : null,
     demo = demo.Enabled ? new { userName = demo.UserName, password = demo.Password } : null,
 }));
 
@@ -224,19 +228,33 @@ auth.MapPost("/password", async (PasswordRequest req, ClaimsPrincipal user, Http
 var files = app.MapGroup("/api/files").RequireAuthorization().AddEndpointFilter(Telemetry.CountFileOperation);
 
 // Every file endpoint takes an optional "drive": missing or "" is the main storage (as before), otherwise a disk id.
-files.MapGet("/", (string? path, string? drive, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => Results.Ok(new { path = VaultRoot.Normalize(path), entries = drives.Resolve(drive, user).Browser.List(path) })));
-
-files.MapGet("/content", (string path, string? drive, bool? download, HttpContext ctx, Drives drives) => Guard(() =>
+files.MapGet("/", (string? path, string? drive, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
 {
-    return ServeFile(ctx, drives.Resolve(drive, ctx.User).Browser.GetFile(path), download == true);
+    var d = drives.Resolve(drive, user);
+    access.See(user, d, path);
+    var entries = access.Filter(user, d, path, d.Browser.List(path));
+    // what the person may do here (the explorer offers only that), and which items carry a permission of their own
+    var level = access.Level(user, d, path);
+    return Results.Ok(new
+    {
+        path = VaultRoot.Normalize(path), entries,
+        access = level,
+        shared = access.CanManage(user, d, path) || Access.IsAdmin(user) ? access.Store.SharedIn(d.Id, path) : null,
+    });
+}));
+
+files.MapGet("/content", (string path, string? drive, bool? download, HttpContext ctx, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(drive, ctx.User);
+    access.Read(ctx.User, d, path);
+    return ServeFile(ctx, d.Browser.GetFile(path), download == true);
 }));
 
 // small previews for the explorer's icon views (any drive, gallery plugin not needed); made once, then served from the cache
-files.MapGet("/thumb", async (string path, string? drive, string? size, HttpContext ctx, Drives drives, Thumbnails thumbs, CancellationToken ct) =>
+files.MapGet("/thumb", async (string path, string? drive, string? size, HttpContext ctx, Drives drives, Access access, Thumbnails thumbs, CancellationToken ct) =>
 {
     string full = "";
-    var bad = Guard(() => { full = drives.Resolve(drive, ctx.User).Browser.GetFile(path); return Results.Empty; });
+    var bad = Guard(() => { var d = drives.Resolve(drive, ctx.User); access.Read(ctx.User, d, path); full = d.Browser.GetFile(path); return Results.Empty; });
     if (bad != Results.Empty)
         return bad;
     if (!Thumbnails.CanPreview(full))
@@ -250,43 +268,76 @@ files.MapGet("/thumb", async (string path, string? drive, string? size, HttpCont
 });
 
 // a folder was opened: make the previews of all its photos and videos in the background, so scrolling finds them ready
-files.MapPost("/thumbs/warm", (WarmRequest req, ClaimsPrincipal user, Drives drives, Thumbnails thumbs) => Guard(() =>
+files.MapPost("/thumbs/warm", (WarmRequest req, ClaimsPrincipal user, Drives drives, Access access, Thumbnails thumbs) => Guard(() =>
 {
     var d = drives.Resolve(req.Drive, user);
+    access.Read(user, d, req.Path);
     var media = d.Browser.List(req.Path)
         .Where(e => e.Kind == EntryKind.File && Thumbnails.CanPreview(e.Name))
         .Select(e => d.Root.Resolve(e.Path));
     return Results.Ok(new { queued = thumbs.Warm(media), waiting = thumbs.Queued });
 }));
 
-files.MapPost("/folder", (FolderRequest req, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => Results.Ok(new { path = drives.Resolve(req.Drive, user).Ops.CreateFolder(req.Parent, req.Name) }))).LogsActivity("folder");
+files.MapPost("/folder", (FolderRequest req, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(req.Drive, user);
+    access.WriteInto(user, d, req.Parent);
+    return Results.Ok(new { path = d.Ops.CreateFolder(req.Parent, req.Name) });
+})).LogsActivity("folder");
 
-files.MapPost("/rename", (RenameRequest req, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => Results.Ok(new { path = drives.Resolve(req.Drive, user).Ops.Rename(req.Path, req.NewName) }))).LogsActivity("rename");
+files.MapPost("/rename", (RenameRequest req, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(req.Drive, user);
+    access.Modify(user, d, req.Path);
+    var path = d.Ops.Rename(req.Path, req.NewName);
+    access.Store.Moved(d.Id, req.Path, path);   // its permissions follow it
+    return Results.Ok(new { path });
+})).LogsActivity("rename");
 
 // move / copy inside one drive; between drives the transfer job is used (verified, in the background)
-files.MapPost("/move", (TransferRequest req, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => Results.Ok(new { paths = drives.Resolve(req.Drive, user).Ops.Move(req.Paths, req.Destination) }))).LogsActivity("move");
+files.MapPost("/move", (TransferRequest req, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(req.Drive, user);
+    foreach (var p in req.Paths) access.Modify(user, d, p);
+    access.WriteInto(user, d, req.Destination);
+    var paths = d.Ops.Move(req.Paths, req.Destination);
+    for (var i = 0; i < req.Paths.Length && i < paths.Count; i++) access.Store.Moved(d.Id, req.Paths[i], paths[i]);
+    return Results.Ok(new { paths });
+})).LogsActivity("move");
 
-files.MapPost("/copy", (TransferRequest req, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => Results.Ok(new { paths = drives.Resolve(req.Drive, user).Ops.Copy(req.Paths, req.Destination) }))).LogsActivity("copy");
+files.MapPost("/copy", (TransferRequest req, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(req.Drive, user);
+    foreach (var p in req.Paths) access.Read(user, d, p);
+    access.WriteInto(user, d, req.Destination);
+    return Results.Ok(new { paths = d.Ops.Copy(req.Paths, req.Destination) });
+})).LogsActivity("copy");
 
-files.MapPost("/delete", (DeleteRequest req, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => Results.Ok(new { items = drives.Resolve(req.Drive, user).Ops.Delete(req.Paths) }))).LogsActivity("delete");
+files.MapPost("/delete", (DeleteRequest req, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(req.Drive, user);
+    foreach (var p in req.Paths) access.Modify(user, d, p);
+    var items = d.Ops.Delete(req.Paths);
+    foreach (var p in req.Paths) access.Store.Deleted(d.Id, p);
+    return Results.Ok(new { items });
+})).LogsActivity("delete");
 
-files.MapGet("/search", (string? path, string? drive, string q, ClaimsPrincipal user, Drives drives, CancellationToken ct) => Guard(() =>
+files.MapGet("/search", (string? path, string? drive, string q, ClaimsPrincipal user, Drives drives, Access access, CancellationToken ct) => Guard(() =>
 {
     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
     timeout.CancelAfter(TimeSpan.FromSeconds(20));
-    var r = drives.Resolve(drive, user).Browser.Search(path, q, 500, timeout.Token);
-    return Results.Ok(new { path = VaultRoot.Normalize(path), entries = r.Entries, truncated = r.Truncated });
+    var d = drives.Resolve(drive, user);
+    access.See(user, d, path);
+    var r = d.Browser.Search(path, q, 500, timeout.Token);
+    return Results.Ok(new { path = VaultRoot.Normalize(path), entries = access.Readable(user, d, r.Entries), truncated = r.Truncated });
 }));
 
-files.MapPost("/hidden", (HiddenRequest req, ClaimsPrincipal user, Drives drives) => Guard(() =>
+files.MapPost("/hidden", (HiddenRequest req, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
 {
-    var vault = drives.Resolve(req.Drive, user).Root;
+    var d = drives.Resolve(req.Drive, user);
+    var vault = d.Root;
     vault.EnsureWritable();
+    foreach (var p in req.Paths) access.Modify(user, d, p);
     foreach (var p in req.Paths)
     {
         var full = vault.Resolve(p);
@@ -297,13 +348,18 @@ files.MapPost("/hidden", (HiddenRequest req, ClaimsPrincipal user, Drives drives
     return Results.NoContent();
 })).LogsActivity("hide");
 
-files.MapGet("/properties", (string path, string? drive, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => Results.Ok(drives.Resolve(drive, user).Browser.Properties(path))));
+files.MapGet("/properties", (string path, string? drive, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(drive, user);
+    access.See(user, d, path);
+    return Results.Ok(d.Browser.Properties(path));
+}));
 
-files.MapGet("/checksum", async (string path, string? drive, ClaimsPrincipal user, Drives drives, CancellationToken ct) =>
+files.MapGet("/checksum", async (string path, string? drive, ClaimsPrincipal user, Drives drives, Access access, CancellationToken ct) =>
 {
     string full;
-    try { full = drives.Resolve(drive, user).Browser.GetFile(path); }
+    try { var d = drives.Resolve(drive, user); access.Read(user, d, path); full = d.Browser.GetFile(path); }
+    catch (PermissionDeniedException e) { return Results.Problem(e.Message, statusCode: 403); }
     catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
     catch (Exception e) when (e is VaultPathException or FileNotFoundException) { return Results.Problem(e.Message, statusCode: 404); }
     catch (SpecialFileException e) { return Results.Problem(e.Message, statusCode: 409); }
@@ -312,34 +368,44 @@ files.MapGet("/checksum", async (string path, string? drive, ClaimsPrincipal use
     return Results.Ok(new { sha256 = Convert.ToHexStringLower(hash) });
 });
 
-files.MapPost("/compress", (CompressRequest req, ClaimsPrincipal user, Drives drives) => Guard(() =>
+files.MapPost("/compress", (CompressRequest req, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
 {
     var d = drives.Resolve(req.Drive, user);
+    foreach (var p in req.Paths) access.Read(user, d, p);
+    if (req.Paths.Length > 0) access.WriteInto(user, d, ParentPath(req.Paths[0]));   // the ZIP is made next to the items
     if (demo.Enabled && DemoOptions.FolderBytes(d.Root.FullPath) >= demo.MaxTotalBytes)
         throw new IOException("Demo storage is full.");
     return Results.Ok(new { path = d.Archives.Compress(req.Paths, req.Name) });
 })).RequiresPlugin("archive").LogsActivity("compress");
 
-files.MapPost("/extract", (ExtractRequest req, ClaimsPrincipal user, Drives drives) => Guard(() =>
+files.MapPost("/extract", (ExtractRequest req, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
 {
     var d = drives.Resolve(req.Drive, user);
+    access.Read(user, d, req.Path);
+    access.WriteInto(user, d, ParentPath(req.Path));   // unpacked next to the ZIP
     var free = demo.Enabled ? Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(d.Root.FullPath)) : new DriveInfo(d.Root.FullPath).AvailableFreeSpace;
     return Results.Ok(new { path = d.Archives.Extract(req.Path, free) });
 })).RequiresPlugin("archive").LogsActivity("extract");
 
-files.MapGet("/zip-list", (string path, string? drive, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => Results.Ok(drives.Resolve(drive, user).Archives.List(path).Select(e => new { name = e.Name, size = e.Size })))).RequiresPlugin("archive");
+files.MapGet("/zip-list", (string path, string? drive, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(drive, user);
+    access.Read(user, d, path);
+    return Results.Ok(d.Archives.List(path).Select(e => new { name = e.Name, size = e.Size }));
+})).RequiresPlugin("archive");
 
 // several items or a folder as one ZIP download, built while it is sent (nothing is stored)
-files.MapGet("/archive", async (string[] paths, string? name, string? drive, HttpContext ctx, Drives drives) =>
+files.MapGet("/archive", async (string[] paths, string? name, string? drive, HttpContext ctx, Drives drives, Access access) =>
 {
     Archives archives;
     try
     {
         var d = drives.Resolve(drive, ctx.User);
         archives = d.Archives;
-        foreach (var p in paths) _ = d.Root.Resolve(p);
+        foreach (var p in paths) { _ = d.Root.Resolve(p); access.Read(ctx.User, d, p); }
     }
+    catch (FileNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
+    catch (PermissionDeniedException e) { return Results.Problem(e.Message, statusCode: 403); }
     catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
     catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: 400); }
     var file = (string.IsNullOrWhiteSpace(name) ? paths.Length == 1 ? Path.GetFileName(paths[0]) : "DiskHaven" : name) + ".zip";
@@ -366,17 +432,39 @@ app.MapGet("/api/storage", (VaultRoot vault) =>
 
 // ---- recycle bin ------------------------------------------------------------------------
 var trash = app.MapGroup("/api/trash").RequireAuthorization().AddEndpointFilter(Telemetry.CountFileOperation);
-trash.MapGet("/", (string? drive, ClaimsPrincipal user, Drives drives) => Guard(() => Results.Ok(drives.Resolve(drive, user).Ops.ListTrash())));
-trash.MapPost("/{id}/restore", (string id, string? drive, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => Results.Ok(new { path = drives.Resolve(drive, user).Ops.Restore(id) }))).LogsActivity("restore");
-trash.MapDelete("/{id}", (string id, string? drive, ClaimsPrincipal user, Drives drives) =>
-    Guard(() => { drives.Resolve(drive, user).Ops.Purge(id); return Results.NoContent(); })).LogsActivity("purge");
-trash.MapDelete("/", (string? drive, ClaimsPrincipal user, Drives drives) => Guard(() =>
+// the recycle bin of a drive shows a person only what they deleted from places they may change
+static bool MayTouch(Access access, ClaimsPrincipal user, DriveContext d, TrashItem item)
+{
+    try { access.Modify(user, d, item.OriginalPath); return true; }
+    catch (Exception e) when (e is PermissionDeniedException or FileNotFoundException or VaultPathException) { return false; }
+}
+TrashItem MyTrashItem(Access access, ClaimsPrincipal user, DriveContext d, string id) =>
+    d.Ops.ListTrash().FirstOrDefault(i => i.Id == id) is { } item && MayTouch(access, user, d, item) ? item
+        : throw new KeyNotFoundException("Item not found in the recycle bin.");
+trash.MapGet("/", (string? drive, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(drive, user);
+    return Results.Ok(d.Ops.ListTrash().Where(i => MayTouch(access, user, d, i)));
+}));
+trash.MapPost("/{id}/restore", (string id, string? drive, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(drive, user);
+    MyTrashItem(access, user, d, id);
+    return Results.Ok(new { path = d.Ops.Restore(id) });
+})).LogsActivity("restore");
+trash.MapDelete("/{id}", (string id, string? drive, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(drive, user);
+    MyTrashItem(access, user, d, id);
+    d.Ops.Purge(id);
+    return Results.NoContent();
+})).LogsActivity("purge");
+trash.MapDelete("/", (string? drive, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
 {
     var d = drives.Resolve(drive, user);
     d.Root.EnsureWritable();
     var ops = d.Ops;
-    foreach (var item in ops.ListTrash())
+    foreach (var item in ops.ListTrash().Where(i => MayTouch(access, user, d, i)))
         ops.Purge(item.Id);
     return Results.NoContent();
 }));
@@ -388,9 +476,17 @@ static object ShareView(Share s) => new
     s.Id, s.Token, s.Path, s.Kind, s.CreatedBy, s.CreatedAt, s.ExpiresAt, s.Downloads, s.Mode, s.HasPassword, s.Uploads,
 };
 var sharesApi = app.MapGroup("/api/shares").RequireAuthorization().RequiresPlugin("sharing");
-sharesApi.MapGet("/", (ShareStore shares) => Results.Ok(shares.List().Select(ShareView)));
-sharesApi.MapPost("/", (ShareRequest req, ClaimsPrincipal user, ShareStore shares, VaultRoot vault) => Guard(() =>
+sharesApi.MapGet("/", (ClaimsPrincipal user, ShareStore shares) =>
+    Results.Ok(shares.List().Where(s => Access.IsAdmin(user) || s.CreatedBy.Equals(user.Identity!.Name, StringComparison.OrdinalIgnoreCase)).Select(ShareView)));
+sharesApi.MapPost("/", (ShareRequest req, ClaimsPrincipal user, ShareStore shares, VaultRoot vault, Drives drives, Access access) => Guard(() =>
 {
+    var main = drives.Resolve(null, user);
+    // a public link hands the item to anyone with the link: only for what the person may change
+    if (access.Level(user, main, req.Path) < AccessLevel.Write)
+    {
+        access.See(user, main, req.Path);
+        throw new PermissionDeniedException();
+    }
     var full = vault.Resolve(req.Path);
     var kind = Directory.Exists(full) ? EntryKind.Folder : File.Exists(full) ? EntryKind.File
         : throw new FileNotFoundException("Item not found.");
@@ -398,7 +494,13 @@ sharesApi.MapPost("/", (ShareRequest req, ClaimsPrincipal user, ShareStore share
     try { return Results.Ok(ShareView(shares.Create(req.Path, kind, user.Identity!.Name!, life, req.Mode ?? ShareMode.View, req.Password))); }
     catch (ArgumentException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status400BadRequest); }
 })).LogsActivity("share");
-sharesApi.MapDelete("/{id}", (string id, ShareStore shares) => Guard(() => { shares.Revoke(id); return Results.NoContent(); })).LogsActivity("unshare");
+sharesApi.MapDelete("/{id}", (string id, ClaimsPrincipal user, ShareStore shares) => Guard(() =>
+{
+    if (!Access.IsAdmin(user) && !shares.List().Any(s => s.Id == id && s.CreatedBy.Equals(user.Identity!.Name, StringComparison.OrdinalIgnoreCase)))
+        throw new KeyNotFoundException("Link not found.");
+    shares.Revoke(id);
+    return Results.NoContent();
+})).LogsActivity("unshare");
 
 // public side of a link: no login, only the shared item and what is inside it.
 // A password-protected link answers only after the password was entered (a cookie scoped to this link).
@@ -505,12 +607,20 @@ publicApi.MapPost("/upload", async (string token, string? name, HttpContext ctx,
 
 // ---- previous versions (plugin) -----------------------------------------------------------
 var versionsApi = app.MapGroup("/api/versions").RequireAuthorization().RequiresPlugin("versions");
-versionsApi.MapGet("/", (string path, VersionStore versions) => Guard(() => Results.Ok(versions.List(path))));
-// offered under the file's own name, not the internal id
-versionsApi.MapGet("/content", (string path, string id, VersionStore versions) => Guard(() =>
-    Results.File(versions.Get(path, id), "application/octet-stream", Path.GetFileName(VaultRoot.Normalize(path)), enableRangeProcessing: true)));
-versionsApi.MapPost("/restore", (VersionRequest req, VersionStore versions, VaultRoot vault, IVaultChangeListener sizes) => Guard(() =>
+versionsApi.MapGet("/", (string path, ClaimsPrincipal user, Drives drives, Access access, VersionStore versions) => Guard(() =>
 {
+    access.Read(user, drives.Resolve(null, user), path);
+    return Results.Ok(versions.List(path));
+}));
+// offered under the file's own name, not the internal id
+versionsApi.MapGet("/content", (string path, string id, ClaimsPrincipal user, Drives drives, Access access, VersionStore versions) => Guard(() =>
+{
+    access.Read(user, drives.Resolve(null, user), path);
+    return Results.File(versions.Get(path, id), "application/octet-stream", Path.GetFileName(VaultRoot.Normalize(path)), enableRangeProcessing: true);
+}));
+versionsApi.MapPost("/restore", (VersionRequest req, ClaimsPrincipal user, Drives drives, Access access, VersionStore versions, VaultRoot vault, IVaultChangeListener sizes) => Guard(() =>
+{
+    access.Modify(user, drives.Resolve(null, user), req.Path);
     var full = vault.Resolve(req.Path);
     if (File.Exists(full)) sizes.Removing(full);
     versions.Restore(req.Path, req.Id);
@@ -528,11 +638,19 @@ usersApi.MapPost("/", (NewUserRequest req, AccountStore accounts) =>
     catch (InvalidOperationException e) { return Results.Problem(e.Message, statusCode: 409); }
     catch (ArgumentException e) { return Results.Problem(e.Message, statusCode: 400); }
 });
-usersApi.MapDelete("/{name}", (string name, ClaimsPrincipal user, AccountStore accounts) =>
+usersApi.MapDelete("/{name}", (string name, ClaimsPrincipal user, AccountStore accounts, PermissionStore perms) =>
 {
     if (name.Equals(user.Identity!.Name, StringComparison.OrdinalIgnoreCase))
         return Results.Problem("You cannot remove your own account.", statusCode: 409);
-    try { accounts.Delete(name); return Results.NoContent(); }
+    try { accounts.Delete(name); perms.RemoveUser(name); return Results.NoContent(); }
+    catch (KeyNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
+    catch (InvalidOperationException e) { return Results.Problem(e.Message, statusCode: 409); }
+});
+usersApi.MapPut("/{name}/role", (string name, RoleRequest req, ClaimsPrincipal user, AccountStore accounts) =>
+{
+    if (name.Equals(user.Identity!.Name, StringComparison.OrdinalIgnoreCase))
+        return Results.Problem("You cannot change your own role.", statusCode: 409);
+    try { accounts.SetAdmin(name, req.IsAdmin); return Results.NoContent(); }
     catch (KeyNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
     catch (InvalidOperationException e) { return Results.Problem(e.Message, statusCode: 409); }
 });
@@ -542,6 +660,104 @@ usersApi.MapPost("/{name}/password", (string name, ResetPasswordRequest req, Acc
     catch (KeyNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
     catch (ArgumentException e) { return Results.Problem(e.Message, statusCode: 400); }
 });
+
+// ---- permissions: who may see and change a folder ------------------------------------------
+// Admins manage everything; an owner (their user folder, a disk given to them) shares what is inside it.
+var accessApi = app.MapGroup("/api/access").RequireAuthorization();
+static object GrantView(Grant g) => new { g.Id, g.Drive, g.Path, g.Principal, g.Level, g.CreatedBy, g.CreatedAt };
+// the people one can share with (names only; every account sees this list, like a file server's user picker)
+accessApi.MapGet("/people", (AccountStore accounts) =>
+    Results.Ok(accounts.List().Select(a => new { userName = a.UserName, isAdmin = a.IsAdmin })));
+// the permissions on one item: its own and the ones it gets from the folders above it
+accessApi.MapGet("/", (string? path, string? drive, ClaimsPrincipal user, Drives drives, Access access) => Guard(() =>
+{
+    var d = drives.Resolve(drive, user);
+    access.See(user, d, path);
+    if (!access.CanManage(user, d, path))
+        throw new PermissionDeniedException("Only an admin or the owner of this folder can share it.");
+    return Results.Ok(new
+    {
+        path = VaultRoot.Normalize(path), drive = d.Id,
+        own = access.Store.On(d.Id, path).Select(GrantView),
+        above = access.Store.Above(d.Id, path).Select(GrantView),
+        canGiveOwner = Access.IsAdmin(user),
+    });
+}));
+accessApi.MapPut("/", (AccessRequest req, ClaimsPrincipal user, Drives drives, Access access, AccountStore accounts) => Guard(() =>
+{
+    var d = drives.Resolve(req.Drive, user);
+    access.See(user, d, req.Path);
+    if (!access.CanManage(user, d, req.Path))
+        throw new PermissionDeniedException("Only an admin or the owner of this folder can share it.");
+    var full = d.Root.Resolve(req.Path);
+    if (!Directory.Exists(full) && !File.Exists(full))
+        throw new FileNotFoundException("Item not found.");
+    var principal = req.Principal == PermissionStore.Everyone ? PermissionStore.Everyone
+        : accounts.Find(req.Principal)?.UserName ?? throw new KeyNotFoundException("User not found.");
+    var me = user.Identity!.Name!;
+    if (!Access.IsAdmin(user))
+    {
+        // an owner shares inside what they own: Read or Write, never ownership, never their own permission
+        if (req.Level == AccessLevel.Owner)
+            throw new PermissionDeniedException("Only an admin can give ownership.");
+        if (principal.Equals(me, StringComparison.OrdinalIgnoreCase))
+            throw new PermissionDeniedException("You cannot change your own permission.");
+        if (access.Store.On(d.Id, req.Path).Any(g => g.Level == AccessLevel.Owner && g.Principal.Equals(principal, StringComparison.OrdinalIgnoreCase)))
+            throw new PermissionDeniedException("Only an admin can change an owner.");
+    }
+    // a file can only be shown: changing it (replace, rename, delete) needs Write on the folder that holds it
+    var level = File.Exists(full) && req.Level > AccessLevel.Read ? AccessLevel.Read : req.Level;
+    var g = access.Store.Set(d.Id, req.Path, principal, level, me);
+    return Results.Ok(g is null ? null : GrantView(g));
+})).LogsActivity("permission");
+// the permissions a person has: their own ("shared with me") or, for an admin, anyone's
+accessApi.MapGet("/mine", (ClaimsPrincipal user, PermissionStore perms, DiskSettingsStore settings) =>
+    Results.Ok(perms.For(user.Identity!.Name!).Select(g => new
+    {
+        g.Id, g.Drive, g.Path, g.Principal, g.Level, g.CreatedBy, g.CreatedAt,
+        driveName = g.Drive.Length == 0 ? "" : settings.Get(g.Drive)?.Name ?? g.Drive,
+    })));
+accessApi.MapGet("/user/{name}", (string name, PermissionStore perms, DiskSettingsStore settings) =>
+    Results.Ok(perms.All().Where(g => g.Principal.Equals(name, StringComparison.OrdinalIgnoreCase)).Select(g => new
+    {
+        g.Id, g.Drive, g.Path, g.Principal, g.Level, g.CreatedBy, g.CreatedAt,
+        driveName = g.Drive.Length == 0 ? "" : settings.Get(g.Drive)?.Name ?? g.Drive,
+    }))).RequireAuthorization("admin");
+accessApi.MapDelete("/{id}", (string id, PermissionStore perms) => Guard(() =>
+{
+    _ = perms.Find(id) ?? throw new KeyNotFoundException("Permission not found.");
+    perms.Remove(id);
+    return Results.NoContent();
+})).RequireAuthorization("admin").LogsActivity("permission");
+// a shared disk, like a family NAS: a folder for each chosen person (theirs alone; admins still see everything)
+// and, if asked, a common folder everyone may read and change. Existing folders are kept and only get the permission.
+accessApi.MapPost("/user-folders", (UserFoldersRequest req, ClaimsPrincipal user, Drives drives, PermissionStore perms, AccountStore accounts) => Guard(() =>
+{
+    var d = drives.Resolve(req.Drive, user);
+    d.Root.EnsureWritable();
+    var parent = VaultRoot.Normalize(req.Parent);
+    if (!Directory.Exists(d.Root.Resolve(parent)))
+        throw new DirectoryNotFoundException("Folder not found.");
+    var made = new List<string>();
+    string Ensure(string name)
+    {
+        var path = parent.Length == 0 ? name : $"{parent}/{name}";
+        if (!Directory.Exists(d.Root.Resolve(path)))
+        {
+            d.Ops.CreateFolder(parent, name);
+            made.Add(path);
+        }
+        return path;
+    }
+    foreach (var name in (req.Users ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        var account = accounts.Find(name) ?? throw new KeyNotFoundException($"User not found: {name}");
+        perms.Set(d.Id, Ensure(account.UserName), account.UserName, AccessLevel.Owner, user.Identity!.Name!);
+    }
+    if (!string.IsNullOrWhiteSpace(req.Common))
+        perms.Set(d.Id, Ensure(req.Common.Trim()), PermissionStore.Everyone, AccessLevel.Write, user.Identity!.Name!);
+    return Results.Ok(new { created = made });
+})).RequireAuthorization("admin").LogsActivity("permission");
 
 // ---- disks and sync (admin) -----------------------------------------------------------
 var disksApi = app.MapGroup("/api/disks").RequireAuthorization("admin").RequiresPlugin("disks");
@@ -624,22 +840,28 @@ backupsApi.MapGet("/{id}/history", (string id, BackupStore store) => Results.Ok(
 
 // ---- drives: the main storage plus every registered disk, like "This PC" ------------------
 app.MapGet("/api/drives", async (ClaimsPrincipal user, VaultRoot vault, DiskService disks, DiskAgentClient agent, PluginStore plugins,
-    CancellationToken ct) =>
+    PermissionStore perms, CancellationToken ct) =>
 {
     var drive = new DriveInfo(vault.FullPath);
-    var list = new List<object>
-    {
-        new { id = "", name = "", kind = "main", state = "mounted", readOnly = false, system = false,
+    var admin = Access.IsAdmin(user);
+    var me = user.Identity?.Name ?? "";
+    // "access" = what the person may do at the drive's top ("None" = only the way to something shared inside it)
+    AccessLevel Top(string id) => admin ? AccessLevel.Owner : perms.LevelOf(me, id, "");
+    var list = new List<object>();
+    if (admin || perms.HasAny(me, Drives.MainId))
+        list.Add(new { id = "", name = "", kind = "main", state = "mounted", readOnly = false, system = false,
               total = demo.Enabled ? demo.MaxTotalBytes : drive.TotalSize,
-              free = demo.Enabled ? Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(vault.FullPath)) : drive.AvailableFreeSpace },
-    };
-    if (user.IsInRole("admin") && plugins.IsInstalled("disks") && !demo.Enabled && agent.Available)
+              free = demo.Enabled ? Math.Max(0, demo.MaxTotalBytes - DemoOptions.FolderBytes(vault.FullPath)) : drive.AvailableFreeSpace,
+              access = Top(Drives.MainId) });
+    if (plugins.IsInstalled("disks") && !demo.Enabled && agent.Available)
     {
         try
         {
             foreach (var d in await disks.ListAsync(ct))
-                list.Add(new { id = d.Id, name = d.Name, kind = d.Kind, state = d.State, readOnly = d.ReadOnly || d.MountedReadOnly == true,
-                    system = d.System, systemMount = d.SystemMount, total = d.Usage?.Total ?? d.Size, free = d.Usage?.Free, fsType = d.FsType });
+                if (admin || (d.Id is { Length: > 0 } && perms.HasAny(me, d.Id)))
+                    list.Add(new { id = d.Id, name = d.Name, kind = d.Kind, state = d.State, readOnly = d.ReadOnly || d.MountedReadOnly == true,
+                        system = admin && d.System, systemMount = admin ? d.SystemMount : null, total = d.Usage?.Total ?? d.Size, free = d.Usage?.Free,
+                        fsType = d.FsType, access = Top(d.Id!) });
         }
         catch (DiskAgentException) { /* agent down: the main storage still works */ }
     }
@@ -647,9 +869,16 @@ app.MapGet("/api/drives", async (ClaimsPrincipal user, VaultRoot vault, DiskServ
 }).RequireAuthorization();
 
 // opening a disk drive mounts it in its own mode (read-only unless set otherwise)
-app.MapPost("/api/drives/{id}/open", (string id, DiskService disks, ActiveJobs active, CancellationToken ct) =>
-    GuardAsync(async () => { await OpenDisk(id, disks, active, ct); return Results.NoContent(); }))
-    .RequireAuthorization("admin").RequiresPlugin("disks");
+app.MapPost("/api/drives/{id}/open", (string id, ClaimsPrincipal user, PermissionStore perms, DiskService disks, ActiveJobs active, CancellationToken ct) =>
+    GuardAsync(async () =>
+    {
+        // someone a disk (or something on it) is shared with may open it too; it opens in its own mode (read-only unless set otherwise)
+        if (!Access.IsAdmin(user) && !perms.HasAny(user.Identity?.Name ?? "", id))
+            throw new DriveUnavailableException("Disk not found.", StatusCodes.Status404NotFound);
+        await OpenDisk(id, disks, active, ct);
+        return Results.NoContent();
+    }))
+    .RequireAuthorization().RequiresPlugin("disks");
 
 disksApi.MapPut("/{id}/read-only", (string id, ReadOnlyRequest req, DiskService disks, ActiveJobs active,
     CancellationToken ct) => GuardAsync(async () =>
@@ -660,8 +889,18 @@ disksApi.MapPut("/{id}/read-only", (string id, ReadOnlyRequest req, DiskService 
 
 // copy / move between drives (or inside one): verified, in the background
 var transfersApi = app.MapGroup("/api/transfers").RequireAuthorization();
-transfersApi.MapPost("/", (DriveTransferRequest req, ClaimsPrincipal user, TransferJobRunner runner) =>
-    Guard(() => Results.Ok(runner.Start(req.FromDrive, req.Paths, req.ToDrive, req.Destination, req.Move, user))));
+transfersApi.MapPost("/", (DriveTransferRequest req, ClaimsPrincipal user, Drives drives, Access access, TransferJobRunner runner) => Guard(() =>
+{
+    var from = drives.Resolve(req.FromDrive, user);
+    var to = drives.Resolve(req.ToDrive, user);
+    foreach (var p in req.Paths)
+        if (req.Move) access.Modify(user, from, p); else access.Read(user, from, p);
+    access.WriteInto(user, to, req.Destination);
+    var job = runner.Start(req.FromDrive, req.Paths, req.ToDrive, req.Destination, req.Move, user);
+    // moved away to another drive: permissions of the old place must not pass to a new item with the same name there
+    if (req.Move && from.Id != to.Id) foreach (var p in req.Paths) access.Store.Deleted(from.Id, p);
+    return Results.Ok(job);
+}));
 // a job is visible to, and can be stopped by, the person who started it and admins only
 static bool MayUse(ClaimsPrincipal user, TransferJob? job) =>
     job is not null && (user.IsInRole("admin") || job.User == user.Identity?.Name);
@@ -687,7 +926,12 @@ app.MapGet("/api/plugins", (ClaimsPrincipal user, PluginStore plugins) => Result
 })).RequireAuthorization();
 
 var quick = app.MapGroup("/api/quick").RequireAuthorization().RequiresPlugin("quick");
-quick.MapGet("/", (ClaimsPrincipal u, QuickAccess q) => { var (f, r) = q.Get(QuickAccess.Name(u)); return Results.Ok(new { favorites = f, recent = r }); });
+quick.MapGet("/", (ClaimsPrincipal u, QuickAccess q, PermissionStore perms) =>
+{
+    var (f, r) = q.Get(QuickAccess.Name(u));
+    bool Ok(string p) => Access.IsAdmin(u) || perms.LevelOf(u.Identity?.Name ?? "", Drives.MainId, p) >= AccessLevel.Read;
+    return Results.Ok(new { favorites = f.Where(Ok), recent = r.Where(Ok) });
+});
 quick.MapPost("/favorite", (QuickRequest req, ClaimsPrincipal u, QuickAccess q) => Guard(() =>
 {
     var path = VaultRoot.Normalize(req.Path);
@@ -756,7 +1000,7 @@ app.MapTus("/api/tus", _ => Task.FromResult(new DefaultTusConfiguration
     },
 })).RequireAuthorization();
 
-app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, ClaimsPrincipal user, Drives drives, PluginStore plugins,
+app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, ClaimsPrincipal user, Drives drives, Access access, PluginStore plugins,
     VersionStore versions, CancellationToken ct) =>
 {
     if (id.Length != 32 || !id.All(char.IsAsciiHexDigitLower))
@@ -766,7 +1010,10 @@ app.MapPost("/api/uploads/{id}/commit", async (string id, CommitRequest req, Cla
     {
         target = drives.Resolve(req.Drive, user);
         target.Root.EnsureWritable();
+        access.WriteInto(user, target, req.Destination);
     }
+    catch (FileNotFoundException e) { return Results.Problem(e.Message, statusCode: 404); }
+    catch (PermissionDeniedException e) { return Results.Problem(e.Message, statusCode: 403); }
     catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
     catch (VaultReadOnlyException e) { return Results.Problem(e.Message, statusCode: 409); }
     var committer = target.Committer;
@@ -858,6 +1105,7 @@ static async Task<IResult> GuardAsync(Func<Task<IResult>> action)
 {
     try { return await action(); }
     catch (UnauthorizedAccessException) { return NoPermission(); }
+    catch (PermissionDeniedException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status403Forbidden); }
     catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
     catch (VaultReadOnlyException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
     catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
@@ -910,10 +1158,13 @@ static BackupJob NewJob(BackupJobRequest req, VaultRoot vault)
     return job;
 }
 
+static string ParentPath(string? path) { var p = VaultRoot.Normalize(path); return p.Contains('/') ? p[..p.LastIndexOf('/')] : ""; }
+
 static IResult Guard(Func<IResult> action)
 {
     try { return action(); }
     catch (UnauthorizedAccessException) { return NoPermission(); }
+    catch (PermissionDeniedException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status403Forbidden); }
     catch (DriveUnavailableException e) { return Results.Problem(e.Message, statusCode: e.Status); }
     catch (VaultReadOnlyException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status409Conflict); }
     catch (VaultPathException e) { return Results.Problem(e.Message, statusCode: StatusCodes.Status400BadRequest); }
@@ -948,6 +1199,9 @@ record ShareRequest(string Path, int? Days, ShareMode? Mode = null, string? Pass
 record UnlockRequest(string? Password);
 sealed class SharePasswordException() : Exception("This link is protected with a password.");
 record NewUserRequest(string UserName, string Password, bool IsAdmin);
+record RoleRequest(bool IsAdmin);
+record AccessRequest(string? Drive, string? Path, string Principal, AccessLevel Level);
+record UserFoldersRequest(string? Drive, string? Parent, string[]? Users, string? Common);
 record ResetPasswordRequest(string NewPassword);
 record CommitRequest(string? Destination, string RelativeName, string Sha256, long? LastModified, bool Replace = false, string? Drive = null);
 record DriveTransferRequest(string? FromDrive, string[] Paths, string? ToDrive, string? Destination, bool Move);

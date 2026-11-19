@@ -154,12 +154,14 @@ public sealed partial class ApiEndpointsTests
         using (var r = await user.PostAsJsonAsync("/api/auth/login", new { userName, password = "aile-parolasi-123" }, Ct))
             Assert.Equal(HttpStatusCode.OK, r.StatusCode);
 
-        Assert.Equal(HttpStatusCode.Forbidden, await Status(user.GetAsync($"/api/files?drive={id}", Ct)));
-        Assert.Equal(HttpStatusCode.Forbidden, await Status(user.PostAsJsonAsync("/api/files/folder", new { parent = "", name = "x", drive = id }, Ct)));
-        Assert.Equal(HttpStatusCode.Forbidden, await Status(user.PostAsJsonAsync("/api/transfers",
+        // nothing is shared with this person: every drive answers like one that does not exist
+        Assert.Equal(HttpStatusCode.NotFound, await Status(user.GetAsync($"/api/files?drive={id}", Ct)));
+        Assert.Equal(HttpStatusCode.NotFound, await Status(user.PostAsJsonAsync("/api/files/folder", new { parent = "", name = "x", drive = id }, Ct)));
+        Assert.Equal(HttpStatusCode.NotFound, await Status(user.PostAsJsonAsync("/api/transfers",
             new { fromDrive = "", paths = new[] { "x" }, toDrive = id, destination = "", move = false }, Ct)));
+        Assert.Equal(HttpStatusCode.NotFound, await Status(user.GetAsync("/api/files", Ct)));
         var drives = await Json(await user.GetAsync("/api/drives", Ct));
-        Assert.Equal(1, drives.GetArrayLength());   // only the main storage
+        Assert.Equal(0, drives.GetArrayLength());
 
         // an admin's transfer is neither visible to nor stoppable by another user
         using (var r = await _admin.PostAsJsonAsync("/api/transfers", new { fromDrive = "", paths = new[] { await CreateFolder(NewName("Is")) }, toDrive = id, destination = "", move = false }, Ct))

@@ -16,12 +16,14 @@ public sealed class DriveUnavailableException(string message, int status = Statu
 
 /// <summary>
 /// Turns the "drive" of a request into the folder to work in. "" (or missing) is the main storage, as before.
-/// Any other value is a disk id; such a drive is only for admins, must be registered and must be mounted right now
+/// Any other value is a disk id; such a drive is for admins and for people something on it is shared with; it must be
+/// registered and must be mounted right now
 /// (checked against the kernel's mount table on every request). Its root is read-only when either the owner's
 /// setting or the kernel says so; with both layers a mistake in one is caught by the other.
 /// </summary>
 public sealed class Drives(VaultRoot main, FileBrowser mainBrowser, FileOperations mainOps, Archives mainArchives,
-    UploadCommitter mainCommitter, DiskService disks, DiskSettingsStore settings, PluginStore plugins, TimeProvider clock)
+    UploadCommitter mainCommitter, DiskService disks, DiskSettingsStore settings, PluginStore plugins, TimeProvider clock,
+    DiskHaven.Core.Accounts.PermissionStore perms)
 {
     public const string MainId = "";
 
@@ -31,10 +33,14 @@ public sealed class Drives(VaultRoot main, FileBrowser mainBrowser, FileOperatio
 
     public DriveContext Resolve(string? drive, ClaimsPrincipal user)
     {
+        // a person who is not an admin only reaches drives where something is shared with them; any other drive
+        // answers like one that does not exist
+        var admin = user.IsInRole("admin");
         if (IsMainId(drive))
-            return Main;
-        if (!user.IsInRole("admin"))
-            throw new DriveUnavailableException("Only admins can open disks.", StatusCodes.Status403Forbidden);
+            return admin || perms.HasAny(user.Identity?.Name ?? "", MainId) ? Main
+                : throw new DriveUnavailableException("Not found.", StatusCodes.Status404NotFound);
+        if (!admin && !perms.HasAny(user.Identity?.Name ?? "", drive!))
+            throw new DriveUnavailableException("Disk not found.", StatusCodes.Status404NotFound);
         if (!plugins.IsInstalled("disks"))
             throw new DriveUnavailableException("This feature is not installed.", StatusCodes.Status404NotFound);
         var s = settings.Get(drive!) ?? throw new DriveUnavailableException("Disk not found.", StatusCodes.Status404NotFound);

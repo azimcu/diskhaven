@@ -347,7 +347,9 @@ public static class GalleryEndpoints
 {
     public static void MapGallery(this WebApplication app)
     {
-        var g = app.MapGroup("/api/gallery").RequireAuthorization().RequiresPlugin(GallerySettings.Id);
+        // the gallery shows the main storage as a whole (the admin's photos): admins only for now; a person a disk is
+        // shared with sees their photos in the explorer, which has the full-screen viewer too
+        var g = app.MapGroup("/api/gallery").RequireAuthorization("admin").RequiresPlugin(GallerySettings.Id);
 
         g.MapGet("/albums", (MediaIndex index, GallerySettings settings) =>
             Results.Ok(new

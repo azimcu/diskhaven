@@ -94,6 +94,24 @@ public sealed class AccountStore
         }
     }
 
+    /// <summary>Makes an account an admin or a user. The last admin stays an admin, so the NAS can always be managed.</summary>
+    public void SetAdmin(string userName, bool isAdmin)
+    {
+        lock (_lock)
+        {
+            var accounts = Load();
+            var i = accounts.FindIndex(a => a.UserName.Equals(userName, StringComparison.OrdinalIgnoreCase));
+            if (i < 0)
+                throw new KeyNotFoundException("User not found.");
+            if (accounts[i].IsAdmin == isAdmin)
+                return;
+            if (!isAdmin && accounts.Count(a => a.IsAdmin) == 1)
+                throw new InvalidOperationException("The last admin cannot become a user.");
+            accounts[i] = accounts[i] with { IsAdmin = isAdmin };
+            Save(accounts);
+        }
+    }
+
     /// <summary>Sets a new password without the old one (an admin resetting another user's password).</summary>
     public void SetPassword(string userName, string newPassword)
     {

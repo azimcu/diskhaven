@@ -40,6 +40,8 @@ public sealed class DiskHavenFactory : WebApplicationFactory<Program>, IAsyncLif
         Environment.SetEnvironmentVariable("DiskHaven__ConfigDir", ConfigDir);
         Environment.SetEnvironmentVariable("DiskHaven__DisksPath", DisksDir);
         Environment.SetEnvironmentVariable("DiskHaven__MountInfo", MountInfo);
+        // the tests sign in several people from one address; the real limit (5 a minute) has a test of its own design
+        Environment.SetEnvironmentVariable("DiskHaven__LoginAttemptsPerMinute", "100");
         Directory.CreateDirectory(DataRoot);
         Directory.CreateDirectory(ConfigDir);
         Directory.CreateDirectory(DisksDir);
