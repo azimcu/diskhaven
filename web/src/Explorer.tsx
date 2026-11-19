@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
   FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, LayoutList, Link2, List, MoreVertical, PanelRight, Pencil,
-  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X, ArrowUpDown, ArrowDownUp, CheckCheck, Play, Images, ImageOff, ImagePlus,
+  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X, ArrowUpDown, ArrowDownUp, CheckCheck, Play, Users, Images, ImageOff, ImagePlus,
 } from 'lucide-react'
 
 const VIEWS = ['icons', 'list', 'details', 'tiles', 'content']
@@ -27,7 +27,8 @@ import { propertiesDialog } from './Properties'
 import { SystemGauge } from './SystemGauge'
 import { hasPlugin, usePlugins } from './plugins'
 import { t } from './strings'
-import type { DriveInfo, FileEntry } from './types'
+import type { AccessLevel, DriveInfo, FileEntry } from './types'
+import { accessDialog } from './Access'
 import { uploadFiles } from './conflicts'
 import { filesFromInput, isActive, uploadEvents, uploads } from './uploads'
 import { transfersPanel } from './Transfers'
@@ -61,12 +62,20 @@ interface Props {
   changed: () => void
   onDropItems: (dest: string, e: React.DragEvent, destDrive: string) => void
   storage: { total: number; free: number } | null
+  /** the signed-in person: admins may share anything, owners what is inside their folder */
+  me: string
+  isAdmin: boolean
 }
 
-export function Explorer({ path, drive, driveInfo, version, clipboard, setClipboard, navigate, changed, onDropItems: dropOnDrive, storage }: Props) {
+export function Explorer({ path, drive, driveInfo, version, clipboard, setClipboard, navigate, changed, onDropItems: dropOnDrive, storage, me, isAdmin }: Props) {
   const onDisk = drive !== ''
-  // read-only disk: nothing that changes it is offered (the server and the kernel refuse it anyway)
-  const ro = onDisk && (driveInfo?.readOnly ?? true)
+  // what the person may do in this folder (from the listing); a folder only looked into is read-only for them
+  const [access, setAccess] = useState<AccessLevel>(isAdmin ? 'Owner' : 'None')
+  const [sharedNames, setSharedNames] = useState<Set<string>>(new Set())
+  const canWrite = access === 'Write' || access === 'Owner'
+  const canShare = isAdmin || access === 'Owner'
+  // read-only disk (or a folder shared to look at): nothing that changes it is offered (the server refuses it anyway)
+  const ro = (onDisk && (driveInfo?.readOnly ?? true)) || !canWrite
   const d = onDisk ? drive : undefined
   const tag = (list: FileEntry[]) => (onDisk ? list.map(e => ({ ...e, drive })) : list)
   const onDropItems = (dest: string, e: React.DragEvent) => {
@@ -197,6 +206,8 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
     api.list(path, d)
       .then(l => {
         setEntries(tag(l.entries)); setError(null)
+        setAccess(l.access ?? (isAdmin ? 'Owner' : 'None'))
+        setSharedNames(new Set(l.shared ?? []))
         // make the previews of the whole folder in the background, so scrolling down finds them ready
         if (l.entries.some(e => e.kind === 'File' && hasThumb(e.extension))) api.warmThumbs(path, d).catch(() => {})
       })
@@ -597,8 +608,10 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
 
       {ro && (
         <p className="info-strip ro-strip">
-          <Lock size={14} /> <span>{t.readOnlyStrip}</span>
-          {driveInfo && <a className="link" href="#/disks">{t.changeOnDisks}</a>}
+          <Lock size={14} /> <span>{!canWrite && !(onDisk && (driveInfo?.readOnly ?? true))
+            ? (access === 'Read' ? 'Bu klasör seninle yalnız görmen için paylaşıldı.' : 'Burada yalnız seninle paylaşılanlar görünür.')
+            : t.readOnlyStrip}</span>
+          {driveInfo && isAdmin && <a className="link" href="#/disks">{t.changeOnDisks}</a>}
         </p>
       )}
       {results && (
@@ -643,7 +656,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
               </thead>
               <tbody>
                 {shown.map(e => (
-                  <Row key={e.path} entry={e} selected={selected.has(e.path)} selecting={selecting} cut={(clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)) || e.hidden}
+                  <Row key={e.path} entry={e} shared={sharedNames.has(e.name)} selected={selected.has(e.path)} selecting={selecting} cut={(clipboard?.mode === 'cut' && clipboard.paths.includes(e.path)) || e.hidden}
                     location={results ? parentOf(e.path) : undefined}
                     renaming={renaming === e.path} onRename={v => commitRename(e, v)} onCancelRename={() => setRenaming(null)}
                     onClick={ev => clickRow(ev, e)} onDoubleClick={() => { if (!coarse()) open(e) }} onContextMenu={ev => contextRow(ev, e)}
@@ -669,7 +682,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
                   <FileIcon entry={e} />
                   {renaming === e.path
                     ? <RenameInput entry={e} onDone={v => commitRename(e, v)} onCancel={() => setRenaming(null)} />
-                    : <span className="li-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}</span>}
+                    : <span className="li-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}{sharedNames.has(e.name) && <SharedMark />}</span>}
                 </div>
               ))}
             </div>
@@ -689,7 +702,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
                   <Thumb entry={e} size={iconSize} />
                   {renaming === e.path
                     ? <RenameInput entry={e} onDone={v => commitRename(e, v)} onCancel={() => setRenaming(null)} />
-                    : <span className="tile-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}</span>}
+                    : <span className="tile-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}{sharedNames.has(e.name) && <SharedMark />}</span>}
                 </div>
               ))}
             </div>
@@ -710,7 +723,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
                   <div className="card-text">
                     {renaming === e.path
                       ? <RenameInput entry={e} onDone={v => commitRename(e, v)} onCancel={() => setRenaming(null)} />
-                      : <span className="card-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}</span>}
+                      : <span className="card-name" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}{sharedNames.has(e.name) && <SharedMark />}</span>}
                     <span className="card-meta">{typeName(e)}{results ? ` · ${parentOf(e.path) || rootName}` : ''}</span>
                     {view === 'tiles' && e.kind === 'File' && <span className="card-meta">{formatSize(e.size)}</span>}
                   </div>
@@ -775,7 +788,8 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           { label: t.copy, icon: <Copy size={16} />, hint: 'Ctrl+C', run: () => toClipboard('copy', sel) },
           'sep',
           !ro && single && { label: t.rename, icon: <Pencil size={16} />, hint: 'F2', run: () => setRenaming(single.path) },
-          plugins.has('sharing') && single && { label: t.share, icon: <Link2 size={16} />, run: () => void import('./Sharing').then(m => m.shareDialog(single)) },
+          canShare && single && { label: 'Kişilerle paylaş', icon: <Users size={16} />, run: () => void accessDialog(single, me, load) },
+          plugins.has('sharing') && canWrite && single && { label: t.share, icon: <Link2 size={16} />, run: () => void import('./Sharing').then(m => m.shareDialog(single)) },
           plugins.has('quick') && single && (favorites.has(single.path)
             ? { label: 'Favorilerden çıkar', icon: <StarOff size={16} />, run: () => toggleFavorite(single) }
             : { label: 'Favorilere ekle', icon: <Star size={16} />, run: () => toggleFavorite(single) }),
@@ -800,6 +814,8 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           !ro && { label: t.uploadFolder, icon: <FolderUp size={16} />, run: () => pickUpload(true) },
           onDisk && !ro && { label: t.diskTrash(rootName), icon: <Trash2 size={16} />, run: () => { location.hash = `#/trash/${encodeURIComponent(drive)}` } },
           'sep',
+          canShare && path !== '' && { label: 'Bu klasörü kişilerle paylaş', icon: <Users size={16} />,
+            run: () => void accessDialog({ name: nameOf(path), path, kind: 'Folder', drive: d, extension: null }, me, load) },
           { label: t.refresh, icon: <RefreshCw size={16} />, hint: 'F5', run: load },
           { label: t.sortBy, icon: <ArrowDownUp size={16} />, run: () => setTimeout(() => toggleSortMenu(sortBtn.current), 0) },
           { label: t.selectAll, hint: 'Ctrl+A', run: () => setSelected(new Set(shown.map(x => x.path))) },
@@ -831,6 +847,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
 
 interface RowProps {
   entry: FileEntry
+  shared?: boolean
   selecting?: boolean
   location?: string
   selected: boolean
@@ -865,7 +882,7 @@ function Row(p: RowProps) {
       <td className="c-name">
         <FileIcon entry={e} />
         {p.renaming ? <RenameInput entry={e} onDone={p.onRename} onCancel={p.onCancelRename} />
-          : <span className="name-text" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}{p.location !== undefined && <small className="loc">/{p.location}</small>}</span>}
+          : <span className="name-text" title={e.problem ? problemText(e.problem) : e.name}>{e.name}{e.problem && <ProblemMark p={e.problem} />}{p.shared && <SharedMark />}{p.location !== undefined && <small className="loc">/{p.location}</small>}</span>}
       </td>
       <td className="c-date">{formatDate(e.modified)}</td>
       <td className="c-type">{typeName(e)}</td>
@@ -963,6 +980,11 @@ function problemText(p: 'bad-name' | 'special') {
   return p === 'bad-name'
     ? 'Bu öğenin adı okunamıyor (eski bir Windows/Linux sisteminden kalma karakterler). Açılamaz ve kopyalanamaz; adını kendi bilgisayarında değiştir.'
     : 'Özel dosya (boru, soket ya da aygıt): içinde veri yok, açılamaz ve kopyalanmaz.'
+}
+
+/** A small "people" mark on items that are shared with someone (shown to admins and owners). */
+function SharedMark() {
+  return <Users size={12} className="shared-mark" aria-label="paylaşılıyor" />
 }
 
 function ProblemMark({ p }: { p: 'bad-name' | 'special' }) {

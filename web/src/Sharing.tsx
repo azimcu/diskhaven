@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, Check, Copy, Download, Inbox, KeyRound, Link2, Lock, Trash2, Upload, UserPlus, X } from 'lucide-react'
+import { ArrowLeft, Check, Copy, Download, FolderPlus, HardDrive, Inbox, KeyRound, Link2, Lock, Trash2, Upload, UserPlus, X } from 'lucide-react'
+import { levelName } from './Access'
 import { api } from './api'
 import { confirmDialog, Modal, mount, promptDialog, toast, toastError, Toasts } from './dialogs'
 import { FileIcon } from './FileIcon'
 import { formatDate, formatSize, nameOf, previewKind } from './format'
 import { t } from './strings'
-import type { FileEntry, PublicItem, Share, ShareMode, UserInfo } from './types'
+import type { DriveInfo, FileEntry, Grant, PublicItem, Share, ShareMode, UserInfo } from './types'
 
 const DAYS = [1, 7, 30, null] as const
 
@@ -124,15 +125,29 @@ export function SharesView() {
 // ---- users (admin) ---------------------------------------------------------------------------
 export function UsersView({ me }: { me: string }) {
   const [list, setList] = useState<UserInfo[] | null>(null)
-  const load = () => api.users().then(setList).catch(toastError)
-  useEffect(() => { void load() }, [])
+  const [drives, setDrives] = useState<DriveInfo[]>([])
+  const [grants, setGrants] = useState<Record<string, Grant[]>>({})
+  const load = () => {
+    api.users().then(async users => {
+      setList(users)
+      const all: Record<string, Grant[]> = {}
+      await Promise.all(users.filter(u => !u.isAdmin).map(async u => { all[u.userName] = await api.accessOfUser(u.userName).catch(() => []) }))
+      setGrants(all)
+    }).catch(toastError)
+    api.drives().then(setDrives).catch(() => {})
+  }
+  useEffect(() => { load() }, [])
+  const disks = drives.filter(d => d.kind !== 'main' && !d.system)
+  const driveName = (id: string) => id ? drives.find(d => d.id === id)?.name ?? 'Disk' : t.thisNas
+
   const add = async () => {
     const name = await promptDialog('Kullanıcı adı (ör. esim)')
     if (!name) return
     const pass = await promptDialog('Parola (en az 10 karakter)', '', 'password')
     if (!pass) return
-    try { await api.addUser(name, pass, false); toast(`${name} eklendi`) } catch (e) { toastError(e) }
-    void load()
+    const admin = await confirmDialog(`${name} yönetici mi olsun? Yönetici her şeyi görür ve sistemi yönetir. "Vazgeç" dersen kullanıcı olur: yalnız onunla paylaştıklarını görür.`, 'Yönetici yap')
+    try { await api.addUser(name, pass, admin); toast(`${name} eklendi (${admin ? t.admin : t.member})`) } catch (e) { toastError(e) }
+    load()
   }
   const reset = async (u: UserInfo) => {
     const pass = await promptDialog(`${u.userName} için yeni parola`, '', 'password')
@@ -142,23 +157,70 @@ export function UsersView({ me }: { me: string }) {
   const remove = async (u: UserInfo) => {
     if (!(await confirmDialog(t.confirmRemoveUser(u.userName), t.removeUser, true))) return
     try { await api.removeUser(u.userName) } catch (e) { toastError(e) }
-    void load()
+    load()
   }
+  const role = async (u: UserInfo) => {
+    const toAdmin = !u.isAdmin
+    if (!(await confirmDialog(toAdmin
+      ? `${u.userName} yönetici olsun mu? Bütün disklerin içini görür, değiştirir ve sistemi yönetir.`
+      : `${u.userName} kullanıcı olsun mu? Artık yalnız onunla paylaşılanları görür.`, toAdmin ? 'Yönetici yap' : 'Kullanıcı yap'))) return
+    try { await api.setRole(u.userName, toAdmin); toast('Rol değişti; bu kişinin oturumu kapandı, yeniden girince yeni rolüyle açılır') } catch (e) { toastError(e) }
+    load()
+  }
+  const giveDisk = async (u: UserInfo, driveId: string) => {
+    if (!driveId) return
+    if (!(await confirmDialog(`"${driveName(driveId)}" diskinin tamamı ${u.userName} kullanıcısına verilsin mi? Diskin içini görür, değiştirir ve başkalarıyla paylaşabilir. Sen yönetici olarak yine her şeyi görürsün.`, 'Diski ver'))) return
+    try { await api.setAccess('', u.userName, 'Owner', driveId); toast('Disk verildi') } catch (e) { toastError(e) }
+    load()
+  }
+  const takeBack = async (g: Grant) => {
+    if (!(await confirmDialog(`${g.principal}: ${driveName(g.drive)} /${g.path} erişimi kaldırılsın mı? Dosyalar silinmez.`, 'Kaldır', true))) return
+    try { await api.removeAccess(g.id); toast('Erişim kaldırıldı') } catch (e) { toastError(e) }
+    load()
+  }
+  const users = (list ?? []).filter(u => !u.isAdmin)
+
   return (
     <div className="main-col">
-      <div className="commandbar"><button className="cmd" onClick={add}><UserPlus size={16} /> {t.addUser}</button></div>
+      <div className="commandbar">
+        <button className="cmd" onClick={add}><UserPlus size={16} /> {t.addUser}</button>
+        <button className="cmd" disabled={users.length === 0} onClick={() => void userFoldersDialog(drives, users.map(u => u.userName)).then(r => r && load())}>
+          <FolderPlus size={16} /> Kullanıcı klasörleri kur</button>
+      </div>
       <div className="addressbar"><div className="crumbs"><span className="crumb current">{t.users}</span></div></div>
-      <p className="info-strip">{t.usersInfo}</p>
+      <p className="info-strip">Yöneticiler her şeyi görür ve yönetir. Kullanıcılar yalnız onlarla paylaşılanları görür: bir diskin tamamı, kendi klasörleri, paylaştığın klasörler ve ortak klasör. Bir klasörü paylaşmak için gezginde sağ tıkla (telefonda ⋮) → Kişilerle paylaş.</p>
       <div className="list-wrap">
         {list === null && <div className="loading"><span className="spinner" /></div>}
         <ul className="card-list">
           {list?.map(u => (
-            <li key={u.userName} className="card-row">
+            <li key={u.userName} className="card-row" style={{ alignItems: 'flex-start' }}>
               <div className="card-main">
                 <b>{u.userName}{u.userName === me ? ' (sen)' : ''}</b>
-                <small>{u.isAdmin ? t.admin : t.member} · {formatDate(u.createdAt)}</small>
+                <small>{u.isAdmin ? `${t.admin} · her şeyi görür` : t.member} · {formatDate(u.createdAt)}</small>
+                {!u.isAdmin && (
+                  <>
+                    {(grants[u.userName] ?? []).length === 0
+                      ? <small className="muted">Henüz hiçbir şey paylaşılmadı: giriş yapınca boş bir ekran görür.</small>
+                      : <ul className="grant-list">{(grants[u.userName] ?? []).map(g => (
+                          <li key={g.id}>
+                            <span title={`${driveName(g.drive)}: /${g.path}`}>{driveName(g.drive)}{g.path ? ` / ${g.path}` : ' (diskin tamamı)'}</span>
+                            <small className="muted">{levelName(g.level)}</small>
+                            <button className="icon-btn" title="Erişimi kaldır" onClick={() => takeBack(g)}><X size={14} /></button>
+                          </li>))}</ul>}
+                    {disks.length > 0 && (
+                      <label className="user-row-actions small" style={{ marginTop: 6 }}>
+                        <HardDrive size={14} />
+                        <select value="" onChange={e => void giveDisk(u, e.target.value)} aria-label="Bir diskin tamamını ver">
+                          <option value="">Bir diskin tamamını ver…</option>
+                          {disks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                      </label>
+                    )}
+                  </>
+                )}
               </div>
               {u.userName !== me && <>
+                <button className="btn small" onClick={() => role(u)} title="Rolü değiştir">{u.isAdmin ? 'Kullanıcı yap' : 'Yönetici yap'}</button>
                 <button className="icon-btn" title={t.resetPassword} onClick={() => reset(u)}><KeyRound size={16} /></button>
                 <button className="icon-btn" title={t.removeUser} onClick={() => remove(u)}><Trash2 size={16} /></button>
               </>}
@@ -167,6 +229,50 @@ export function UsersView({ me }: { me: string }) {
         </ul>
       </div>
     </div>
+  )
+}
+
+/** A disk shared like a family NAS: a folder per person (theirs alone) and a common folder for everyone. */
+function userFoldersDialog(drives: DriveInfo[], users: string[]) {
+  return mount<boolean>(done => <UserFoldersDialog drives={drives.filter(d => !d.system && !d.readOnly)} users={users} onClose={done} />)
+}
+
+function UserFoldersDialog({ drives, users, onClose }: { drives: DriveInfo[]; users: string[]; onClose: (changed: boolean) => void }) {
+  const [drive, setDrive] = useState(drives[0]?.id ?? '')
+  const [picked, setPicked] = useState<Set<string>>(new Set(users))
+  const [common, setCommon] = useState(true)
+  const [commonName, setCommonName] = useState('Ortak')
+  const [busy, setBusy] = useState(false)
+  const run = async () => {
+    setBusy(true)
+    try {
+      const r = await api.userFolders(drive, '', [...picked], common ? commonName.trim() || 'Ortak' : null)
+      toast(r.created.length ? `Kuruldu: ${r.created.join(', ')}` : 'Klasörler zaten vardı; izinler verildi')
+      onClose(true)
+    } catch (e) { toastError(e); setBusy(false) }
+  }
+  return (
+    <Modal onClose={() => onClose(false)}>
+      <h2 className="modal-h">Kullanıcı klasörleri kur</h2>
+      <p className="modal-text small">Seçtiğin diskin en üstünde her kişiye adıyla bir klasör açılır. Klasör yalnız onundur: başkaları görmez, sen yönetici olarak her şeyi görürsün. Ortak klasörü herkes görür ve değiştirir. Var olan klasörlere dokunulmaz, yalnız izin verilir.</p>
+      {drives.length === 0 ? <p className="modal-text">Yazılabilir bir disk yok.</p> : <>
+        <label className="field"><span>Disk</span>
+          <select className="input" value={drive} onChange={e => setDrive(e.target.value)}>
+            {drives.map(d => <option key={d.id} value={d.id}>{d.kind === 'main' ? t.thisNas : d.name}</option>)}
+          </select>
+        </label>
+        <fieldset className="field"><legend>Klasörü açılacaklar</legend>
+          {users.map(u => <label key={u} className="check"><input type="checkbox" checked={picked.has(u)}
+            onChange={e => setPicked(p => { const n = new Set(p); if (e.target.checked) n.add(u); else n.delete(u); return n })} /> {u}</label>)}
+        </fieldset>
+        <label className="check"><input type="checkbox" checked={common} onChange={e => setCommon(e.target.checked)} /> Ortak klasör (herkes görür ve değiştirir)</label>
+        {common && <input className="text" value={commonName} onChange={e => setCommonName(e.target.value)} aria-label="Ortak klasörün adı" />}
+      </>}
+      <div className="modal-actions">
+        <button className="btn" onClick={() => onClose(false)}>Vazgeç</button>
+        <button className="btn primary" disabled={busy || !drives.length || (picked.size === 0 && !common)} onClick={run}>Kur</button>
+      </div>
+    </Modal>
   )
 }
 

@@ -731,3 +731,26 @@ a.tree-row { color: inherit; text-decoration: none; }
 }
 /* dar telefonlarda (iPhone mini / SE) yazı yerine yalnız simge, araçlar sığsın */
 @media (max-width: 400px) { .titlebar .brand { display: none; } }
+
+/* ---- sharing with people (who may see / change a folder) ---- */
+.modal:has(.access) { width: min(520px, 94vw); max-height: calc(100vh - 32px); overflow: auto; }
+.access-table { width: 100%; border-collapse: collapse; margin: 4px 0 14px; font-size: 14px; }
+.access-table th, .access-table td { padding: 8px 6px; border-bottom: 1px solid var(--border); text-align: center; vertical-align: middle; }
+.access-table th[scope="row"] { text-align: left; font-weight: 500; }
+.access-table th[scope="row"] small { display: block; font-weight: 400; font-size: 12px; margin-top: 2px; }
+.access-table thead th { font-weight: 400; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.access-col { display: inline-flex; align-items: center; gap: 4px; }
+.access-who { display: inline-flex; align-items: center; gap: 6px; }
+.access-table input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent); cursor: pointer; }
+.access-table input:disabled { cursor: default; opacity: .7; }
+.shared-mark { flex-shrink: 0; margin-left: 5px; vertical-align: -1px; color: var(--accent); }
+.shared-list .tree-row small { color: var(--muted); margin-left: auto; font-size: 11px; }
+.user-row-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.grant-list { list-style: none; margin: 6px 0 0; padding: 0; font-size: 13px; }
+.grant-list li { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px dashed var(--border); }
+.grant-list li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal label.check { display: flex; justify-content: flex-start; align-items: center; gap: 8px; color: var(--text); margin: 6px 0; font-size: 14px; font-weight: 400; }
+.modal fieldset.field { border: 0; padding: 0; margin: 0 0 12px; }
+.modal fieldset.field legend { font-size: 13px; font-weight: 600; margin-bottom: 4px; color: var(--text); }
+.modal input.text { width: 100%; margin: 2px 0 12px; }
+.card-row .grant-list { max-width: 520px; }

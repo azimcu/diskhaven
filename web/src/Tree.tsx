@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Archive, ChevronRight, Clock, HardDrive, Images, Link2, Lock, ShieldCheck, Star, Trash2, Usb } from 'lucide-react'
+import { Archive, ChevronRight, Clock, HardDrive, Images, Link2, Lock, ShieldCheck, Star, Trash2, Usb, Users } from 'lucide-react'
 import { usePlugins } from './plugins'
 import { formatSize } from './format'
-import type { DriveInfo } from './types'
+import type { DriveInfo, Grant } from './types'
 import { api, folderEntries } from './api'
 import { FileIcon } from './FileIcon'
 import { t } from './strings'
@@ -20,13 +20,20 @@ interface Props {
   currentDrive: string | null
   drives: DriveInfo[]
   onOpenDrive: (d: DriveInfo) => void
+  /** opens a place shared with the person */
+  onOpenAt: (drive: string, path: string) => void
 }
 
 /** Left navigation pane: folder tree of the NAS (loaded lazily) and the recycle bin. */
-export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin, onDropItems, storage, currentDrive, drives, onOpenDrive }: Props) {
+export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin, onDropItems, storage, currentDrive, drives, onOpenDrive, onOpenAt }: Props) {
   // drives, like "This PC": the NAS storage and (for admins) every disk with its fill level
   const plugins = usePlugins()
   const disks = drives.filter(d => d.kind !== 'main')
+  // the main storage is listed only for people who may see something on it (admins always)
+  const hasMain = drives.some(d => d.kind === 'main')
+  // "shared with me": what others gave this person (not for admins, who see everything anyway)
+  const [mine, setMine] = useState<Grant[]>([])
+  useEffect(() => { if (!isAdmin) api.accessMine().then(setMine).catch(() => {}) }, [isAdmin, version])
   const [quick, setQuick] = useState<{ favorites: string[]; recent: string[] }>({ favorites: [], recent: [] })
   useEffect(() => {
     if (!plugins.has('quick')) return
@@ -64,11 +71,31 @@ export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin
         ))}
         <div className="tree-sep" />
       </>}
-      <TreeNode path="" name={t.thisNas} depth={0} root {...{ current, expanded, toggle, onOpen, version, onDropItems }} />
-      <div className="tree-sep" />
+      {!isAdmin && mine.length > 0 && <>
+        <div className="drives-title">Benimle paylaşılanlar</div>
+        <div className="shared-list">
+          {mine.map(g => {
+            const name = g.path ? g.path.split('/').pop()! : (g.driveName || 'Disk')
+            const where = g.drive ? g.driveName || 'Disk' : t.thisNas
+            // a shared file opens its folder
+            return (
+              <button key={g.id} className="tree-row" style={{ paddingLeft: 30 }} title={`${where}: /${g.path}`}
+                onClick={() => onOpenAt(g.drive, g.path)}>
+                <Users size={15} className="ic" strokeWidth={1.5} /> <span className="tree-label">{name}</span>
+                <small>{g.level === 'Owner' ? 'senin' : g.level === 'Write' ? 'değiştirebilir' : 'görebilir'}{g.principal === '*' ? ' · herkes' : ''}</small>
+              </button>
+            )
+          })}
+        </div>
+        <div className="tree-sep" />
+      </>}
+      {hasMain && <>
+        <TreeNode path="" name={t.thisNas} depth={0} root {...{ current, expanded, toggle, onOpen, version, onDropItems }} />
+        <div className="tree-sep" />
+      </>}
       <div className="drives" aria-label="Sürücüler">
         <div className="drives-title">Sürücüler</div>
-        {storage && <Drive name={t.thisNas} icon={<HardDrive size={18} strokeWidth={1.5} />} total={storage.total} free={storage.free}
+        {storage && hasMain && <Drive name={t.thisNas} icon={<HardDrive size={18} strokeWidth={1.5} />} total={storage.total} free={storage.free}
           active={current != null && !currentDrive} onClick={() => onOpen('')} />}
         {disks.filter(d => !d.system).map(d => (
           <Drive key={d.id} name={d.name} icon={d.kind === 'usb' ? <Usb size={18} strokeWidth={1.5} /> : <HardDrive size={18} strokeWidth={1.5} />}
@@ -98,7 +125,7 @@ export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin
           ))}
         </details>
       )}
-      {plugins.has('gallery') && <a className="tree-row" style={{ paddingLeft: 30 }} href="/galeri.html">
+      {isAdmin && plugins.has('gallery') && <a className="tree-row" style={{ paddingLeft: 30 }} href="/galeri.html">
         <Images size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">Galeri</span>
       </a>}
       {plugins.has('sharing') && <button className={`tree-row ${special === 'shares' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('shares')}>
@@ -110,9 +137,9 @@ export function Tree({ current, special, version, onOpen, onOpenSpecial, isAdmin
       {isAdmin && plugins.has('disks') && <button className={`tree-row ${special === 'disks' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('disks')}>
         <Usb size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.disks}</span>
       </button>}
-      <button className={`tree-row ${special === 'trash' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('trash')}>
+      {hasMain && <button className={`tree-row ${special === 'trash' ? 'active' : ''}`} style={{ paddingLeft: 30 }} onClick={() => onOpenSpecial('trash')}>
         <Trash2 size={16} className="ic" strokeWidth={1.5} /> <span className="tree-label">{t.trash}</span>
-      </button>
+      </button>}
     </nav>
   )
 }

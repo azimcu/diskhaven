@@ -22,9 +22,22 @@ export interface FileEntry {
 
 export interface FileVersion { id: string; savedAt: string; size: number }
 
+/** What a person may do with an item: None = only the way to something shared inside it. */
+export type AccessLevel = 'None' | 'Read' | 'Write' | 'Owner'
+
 export interface Listing {
   path: string
   entries: FileEntry[]
+  /** what the signed-in person may do in this folder (admins: Owner) */
+  access?: AccessLevel
+  /** names of the items here that carry a permission of their own (for admins and owners) */
+  shared?: string[] | null
+}
+
+/** A permission: <principal> ("*" = everyone) has <level> on <path> of <drive> and everything inside it. */
+export interface Grant {
+  id: string; drive: string; path: string; principal: string; level: AccessLevel; createdBy: string; createdAt: string
+  driveName?: string
 }
 
 export interface TrashItem {
@@ -40,6 +53,7 @@ export interface AuthState {
   setupRequired: boolean
   user: string | null
   isAdmin?: boolean
+  role?: 'admin' | 'user' | null
   /** set on the public demo instance: the sign-in shown on the login page */
   demo?: { userName: string; password: string } | null
 }
@@ -84,6 +98,8 @@ export interface Disk {
 export interface DriveInfo {
   id: string; name: string; kind: 'main' | 'usb' | 'sata' | 'nvme' | 'virtual'; state: Disk['state']; readOnly: boolean
   system: boolean; systemMount?: string | null; total: number; free: number | null; fsType?: string
+  /** what the signed-in person may do at the drive's top (None = only the way to something shared inside it) */
+  access?: AccessLevel
 }
 
 export interface TransferProgress { filesDone: number; filesTotal: number; bytesDone: number; bytesTotal: number; current: string | null }

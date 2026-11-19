@@ -1,4 +1,4 @@
-import type { ActivityItem, AdminOverview, AfterSync, AuthState, Disk, DriveInfo, FileEntry, TransferJob, FileVersion, HideawayState, ItemProperties, Listing, PluginInfo, SystemSample, PublicItem, Share, ShareMode, BackupJob, BackupBody, BackupRun, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
+import type { AccessLevel, Grant, ActivityItem, AdminOverview, AfterSync, AuthState, Disk, DriveInfo, FileEntry, TransferJob, FileVersion, HideawayState, ItemProperties, Listing, PluginInfo, SystemSample, PublicItem, Share, ShareMode, BackupJob, BackupBody, BackupRun, SmartInfo, SyncReport, SyncSchedule, TrashItem, UserInfo } from './types'
 import { translateServerMessage } from './strings'
 
 export class ApiError extends Error {
@@ -127,6 +127,18 @@ export const api = {
   users: () => request<UserInfo[]>('GET', '/api/users'),
   addUser: (userName: string, password: string, isAdmin: boolean) => request<UserInfo>('POST', '/api/users', { userName, password, isAdmin }),
   removeUser: (name: string) => request<void>('DELETE', `/api/users/${encodeURIComponent(name)}`),
+  setRole: (name: string, isAdmin: boolean) => request<void>('PUT', `/api/users/${encodeURIComponent(name)}/role`, { isAdmin }),
+  // permissions: who may see and change a folder
+  people: () => request<{ userName: string; isAdmin: boolean }[]>('GET', '/api/access/people'),
+  access: (path: string, drive?: string) =>
+    request<{ path: string; drive: string; own: Grant[]; above: Grant[]; canGiveOwner: boolean }>('GET', `/api/access?path=${q(path)}${dq(drive)}`),
+  setAccess: (path: string, principal: string, level: AccessLevel, drive?: string) =>
+    request<Grant | null>('PUT', '/api/access', { path, principal, level, ...db(drive) }),
+  accessMine: () => request<Grant[]>('GET', '/api/access/mine'),
+  accessOfUser: (name: string) => request<Grant[]>('GET', `/api/access/user/${encodeURIComponent(name)}`),
+  removeAccess: (id: string) => request<void>('DELETE', `/api/access/${encodeURIComponent(id)}`),
+  userFolders: (drive: string, parent: string, users: string[], common: string | null) =>
+    request<{ created: string[] }>('POST', '/api/access/user-folders', { drive: drive || undefined, parent, users, common }),
   resetPassword: (name: string, newPassword: string) =>
     request<void>('POST', `/api/users/${encodeURIComponent(name)}/password`, { newPassword }),
 

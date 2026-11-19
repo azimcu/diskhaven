@@ -52,6 +52,7 @@ export function App() {
   const [clipboard, setClipboard] = useState<Clipboard | null>(null)
   const [storage, setStorage] = useState<{ total: number; free: number } | null>(null)
   const [drives, setDrives] = useState<DriveInfo[]>([])
+  const [drivesLoaded, setDrivesLoaded] = useState(false)
   const [drawer, setDrawer] = useState(false)
   const [userMenu, setUserMenu] = useState(false)
 
@@ -64,7 +65,7 @@ export function App() {
     return () => { window.removeEventListener('diskhaven:unauthorized', onUnauthorized); window.removeEventListener('hashchange', onHash) }
   }, [])
 
-  const loadDrives = useCallback(() => api.drives().then(setDrives).catch(() => {}), [])
+  const loadDrives = useCallback(() => api.drives().then(d => { setDrives(d); setDrivesLoaded(true) }).catch(() => {}), [])
   const changed = useCallback(() => {
     setVersion(v => v + 1)
     api.storage().then(setStorage).catch(() => {})
@@ -92,6 +93,23 @@ export function App() {
       location.hash = hashFor('', d.id)
     } catch (e) { toastError(e) }
   }, [loadDrives])
+
+  // opens a place shared with the person ("shared with me"): the disk is opened first when needed
+  const openAt = useCallback(async (drive: string, path: string) => {
+    const d = drives.find(x => x.id === drive)
+    try {
+      if (drive && d && d.state !== 'mounted') { toast(`${d.name} açılıyor…`); await api.openDrive(drive); await loadDrives() }
+      location.hash = hashFor(path, drive)
+    } catch (e) { toastError(e) }
+  }, [drives, loadDrives])
+
+  // someone who is not an admin and has nothing on the main storage starts on the first drive shared with them
+  const hasMain = drives.some(d => d.kind === 'main')
+  useEffect(() => {
+    if (!auth?.user || auth.isAdmin || !drivesLoaded || hasMain || route.view !== 'files' || route.drive !== '') return
+    const first = drives.find(d => !d.system)
+    if (first) void openDrive(first)
+  }, [auth?.user, auth?.isAdmin, drivesLoaded, hasMain, route, drives, openDrive])
 
   /**
    * Drop onto a folder of drive <destDrive>: items dragged inside DiskHaven are moved (Ctrl = copy) — on the same
@@ -176,13 +194,17 @@ export function App() {
           <Tree current={route.view === 'files' && !route.drive ? route.path : null} special={route.view === 'files' ? null : route.view}
             currentDrive={route.view === 'files' ? route.drive : null} drives={drives} onOpenDrive={openDrive}
             version={version} onOpen={p => { location.hash = hashFor(p) }} onOpenSpecial={v => { location.hash = `#/${v}` }}
-            isAdmin={!!auth.isAdmin} onDropItems={(dest, e) => onDropItems(dest, e, '')} storage={storage} />
+            isAdmin={!!auth.isAdmin} onDropItems={(dest, e) => onDropItems(dest, e, '')} storage={storage} onOpenAt={openAt} />
         </div>
         {drawer && <div className="side-backdrop" onClick={() => setDrawer(false)} />}
         <Suspense fallback={<div className="main-col"><div className="loading"><span className="spinner" /></div></div>}>
-        {route.view === 'files'
+        {route.view === 'files' && !auth.isAdmin && route.drive === '' && drivesLoaded && !hasMain
+          ? <div className="main-col"><p className="empty-note">{drives.length
+              ? 'Açılıyor…'
+              : <>Henüz seninle paylaşılan bir klasör ya da disk yok.<br /><small>Yönetici bir şey paylaşınca burada görünür.</small></>}</p></div>
+          : route.view === 'files'
           ? <Explorer key={route.drive} path={route.path} drive={route.drive} driveInfo={driveInfo} version={version}
-              clipboard={clipboard} setClipboard={setClipboard}
+              clipboard={clipboard} setClipboard={setClipboard} me={auth.user} isAdmin={!!auth.isAdmin}
               navigate={navigate} changed={changed} onDropItems={onDropItems} storage={storage} />
           : route.view === 'trash' ? <TrashView key={route.drive ?? ''} drive={route.drive ?? ''}
               driveName={route.drive ? drives.find(d => d.id === route.drive)?.name ?? t.disk : null} onChanged={changed} />

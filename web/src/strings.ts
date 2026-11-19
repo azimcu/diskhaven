@@ -222,7 +222,7 @@ export const t = {
   resetPassword: 'Parolasını değiştir',
   removeUser: 'Sil',
   confirmRemoveUser: (n: string) => `"${n}" hesabı silinecek. Dosyalar silinmez, sadece bu kişi artık giriş yapamaz.`,
-  usersInfo: 'Tüm kullanıcılar aynı dosyaları görür. Diskler sayfasını ve kullanıcıları sadece yöneticiler yönetir.',
+  usersInfo: 'Yöneticiler her şeyi görür; kullanıcılar yalnız onlarla paylaşılanları görür.',
   sharedBy: (by: string) => `${by} seninle paylaştı`,
   leaveWarning: 'Yükleme sürüyor. Sayfadan çıkarsan yarıda kalan dosyalar sonra kaldığı yerden devam eder.',
 }
