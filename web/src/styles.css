@@ -731,6 +731,7 @@ a.tree-row { color: inherit; text-decoration: none; }
 }
 /* dar telefonlarda (iPhone mini / SE) yazı yerine yalnız simge, araçlar sığsın */
 @media (max-width: 400px) { .titlebar .brand { display: none; } }
+@media (max-width: 360px) { .pt-btn { width: 34px; } .titlebar { gap: 4px; padding-left: 8px; padding-right: 8px; } }
 
 /* ---- sharing with people (who may see / change a folder) ---- */
 .modal:has(.access) { width: min(520px, 94vw); max-height: calc(100vh - 32px); overflow: auto; }
