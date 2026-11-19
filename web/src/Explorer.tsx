@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
   FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, LayoutList, Link2, List, MoreVertical, PanelRight, Pencil,
-  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X, ArrowUpDown, ArrowDownUp, CheckCheck, Images, ImageOff, ImagePlus,
+  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X, ArrowUpDown, ArrowDownUp, CheckCheck, Play, Images, ImageOff, ImagePlus,
 } from 'lucide-react'
 
 const VIEWS = ['icons', 'list', 'details', 'tiles', 'content']
@@ -20,7 +20,7 @@ const viewIcon = (v: string, size = 16) =>
 import { api } from './api'
 import { toast, toastError } from './dialogs'
 import { FileIcon } from './FileIcon'
-import { formatDate, formatSize, hasThumb, nameOf, parentOf, previewKind, typeName, uniqueName } from './format'
+import { formatDate, formatSize, hasThumb, isVideoExt, nameOf, parentOf, previewKind, typeName, uniqueName } from './format'
 import { BLANK, useNearScreen } from './nearScreen'
 import { PreviewModal, PreviewPane } from './Preview'
 import { propertiesDialog } from './Properties'
@@ -914,8 +914,13 @@ function Thumb({ entry, size }: { entry: FileEntry; size: number }) {
   if (small || svg) {
     // a small cached preview, asked for only while on screen; the original is never downloaded just to draw an icon
     const url = svg ? api.contentUrl(entry.path, false, entry.drive) : api.thumbUrl(entry.path, 's', entry.drive)
-    return <img ref={ref} className={`thumb${loaded ? '' : ' loading'}`} src={near || loaded ? url : BLANK} alt="" decoding="async" draggable={false}
+    const ext = (entry.extension ?? '').toLowerCase()
+    const img = <img ref={ref} className={`thumb${loaded ? '' : ' loading'}${ext === 'pdf' ? ' page' : ''}`} src={near || loaded ? url : BLANK} alt="" decoding="async" draggable={false}
       onLoad={e => { if (e.currentTarget.src !== BLANK) setLoaded(true) }} onError={() => setBroken(true)} />
+    // a video's frame carries a small play mark, a PDF's page a type label, so they are not taken for photos
+    if (isVideoExt(ext) || ext === 'pdf')
+      return <span className="thumb-wrap">{img}{loaded && (ext === 'pdf' ? <b className="thumb-tag">PDF</b> : <span className="thumb-play"><Play size={size >= 96 ? 16 : 11} fill="currentColor" /></span>)}</span>
+    return img
   }
   return <span className="thumb icon"><FileIcon entry={entry} size={Math.round(size * 0.62)} /></span>
 }

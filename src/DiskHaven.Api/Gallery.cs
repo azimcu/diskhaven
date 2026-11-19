@@ -76,6 +76,18 @@ public sealed class Thumbnails
     private readonly ILogger<Thumbnails> _log;
     public bool VipsAvailable { get; }
     public bool FfmpegAvailable { get; }
+    public bool PdfAvailable { get; }
+
+    private static readonly IReadOnlySet<string> AudioTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".mp3", ".m4a", ".flac" };
+    public static bool IsPdf(string name) => Path.GetExtension(name).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
+    public static bool IsAudio(string name) => AudioTypes.Contains(Path.GetExtension(name));
+
+    /// <summary>Files the explorer shows a small picture of: photos, videos (a frame), PDFs (the first page)
+    /// and music (the album cover inside the file, when it has one).</summary>
+    public static bool CanPreview(string name) => MediaIndex.IsMedia(name) || IsPdf(name) || IsAudio(name);
+
+    private bool ToolFor(string full) =>
+        IsPdf(full) ? PdfAvailable : MediaIndex.IsVideo(full) || IsAudio(full) ? FfmpegAvailable : VipsAvailable;
 
     public Thumbnails(string configDir, ILogger<Thumbnails> log)
     {
@@ -83,6 +95,7 @@ public sealed class Thumbnails
         _log = log;
         VipsAvailable = OnPath("vipsthumbnail");
         FfmpegAvailable = OnPath("ffmpeg");
+        PdfAvailable = OnPath("pdftoppm");
     }
 
     private static bool OnPath(string tool) =>
@@ -102,7 +115,7 @@ public sealed class Thumbnails
         var n = 0;
         foreach (var full in fullPaths)
         {
-            if (!MediaIndex.IsMedia(full) || (MediaIndex.IsVideo(full) ? !FfmpegAvailable : !VipsAvailable) || SpecialFiles.IsSpecial(full))
+            if (!CanPreview(full) || !ToolFor(full) || SpecialFiles.IsSpecial(full))
                 continue;
             var target = Target(full, "s");
             if (target is null || File.Exists(target) || !_queued.TryAdd(full, 0))
@@ -159,12 +172,14 @@ public sealed class Thumbnails
         var target = Path.Combine(_cache, key[..2], key + ".jpg");
         if (File.Exists(target))
             return target;
-        var video = MediaIndex.IsVideo(full);
-        if (video ? !FfmpegAvailable : !VipsAvailable)
+        if (!CanPreview(full) || !ToolFor(full))
             return null;
-        // stored files come from anyone with an account (or a drop-box link): only hand real photo / video
-        // containers to the native decoders, never an SVG, PDF, playlist or script renamed to .jpg / .mp4
-        if (!LooksLikeMedia(full, video))
+        var video = MediaIndex.IsVideo(full);
+        var pdf = IsPdf(full);
+        var audio = IsAudio(full);
+        // stored files come from anyone with an account (or a drop-box link): only hand real photo / video / PDF / music
+        // files to the native decoders, never an SVG, playlist or script renamed to .jpg / .mp4 / .pdf
+        if (pdf ? !LooksLikePdf(full) : audio ? !LooksLikeAudio(full) : !LooksLikeMedia(full, video))
             return null;
         await _gate.WaitAsync(ct);
         try
@@ -173,7 +188,9 @@ public sealed class Thumbnails
                 return target;
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             var tmp = target + ".tmp.jpg";
-            var ok = video ? await VideoFrame(full, tmp, variant, ct) : await Photo(full, tmp, variant, ct);
+            var ok = pdf ? await PdfPage(full, tmp, variant, ct)
+                : audio ? await AudioCover(full, tmp, variant, ct)
+                : video ? await VideoFrame(full, tmp, variant, ct) : await Photo(full, tmp, variant, ct);
             if (!ok || !File.Exists(tmp) || new FileInfo(tmp).Length == 0)
             {
                 File.Delete(tmp);
@@ -205,6 +222,51 @@ public sealed class Thumbnails
                    || At(0, [0x1A, 0x45, 0xDF, 0xA3]) || (riff && At(8, "AVI "u8));
         return At(0, [0xFF, 0xD8, 0xFF]) || At(0, [0x89, 0x50, 0x4E, 0x47]) || At(0, "GIF8"u8) || (riff && At(8, "WEBP"u8))
                || At(0, "BM"u8) || At(0, [0x49, 0x49, 0x2A, 0x00]) || At(0, [0x4D, 0x4D, 0x00, 0x2A]) || isoBmff;
+    }
+
+    /// <summary>"%PDF-" within the first kilobyte (where the standard allows it to start).</summary>
+    public static bool LooksLikePdf(string full)
+    {
+        if (SpecialFiles.IsSpecial(full))
+            return false;
+        var h = new byte[1024];
+        int n;
+        try { using var f = File.OpenRead(full); n = f.ReadAtLeast(h, h.Length, throwOnEndOfStream: false); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+        return h.AsSpan(0, n).IndexOf("%PDF-"u8) >= 0;
+    }
+
+    /// <summary>MP3 (ID3 tag or a frame header), MP4 audio (ISO BMFF) or FLAC.</summary>
+    public static bool LooksLikeAudio(string full)
+    {
+        if (SpecialFiles.IsSpecial(full))
+            return false;
+        var h = new byte[12];
+        int n;
+        try { using var f = File.OpenRead(full); n = f.ReadAtLeast(h, 12, throwOnEndOfStream: false); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+        if (n < 12)
+            return false;
+        return h.AsSpan(0, 3).SequenceEqual("ID3"u8) || (h[0] == 0xFF && (h[1] & 0xE0) == 0xE0)
+               || h.AsSpan(4, 4).SequenceEqual("ftyp"u8) || h.AsSpan(0, 4).SequenceEqual("fLaC"u8);
+    }
+
+    // the first page, as a JPEG, by poppler (no fonts or scripts are run: it only draws the page)
+    private async Task<bool> PdfPage(string full, string output, string variant, CancellationToken ct)
+    {
+        var stem = output[..^4];   // pdftoppm adds ".jpg" itself
+        var ok = await Run("pdftoppm", ["-f", "1", "-l", "1", "-singlefile", "-jpeg", "-jpegopt", "quality=80",
+            "-scale-to", variant == "s" ? "360" : "1600", full, stem], ct);
+        return ok && File.Exists(output);
+    }
+
+    // the cover picture stored inside a music file; none = no preview (the explorer shows the icon)
+    private async Task<bool> AudioCover(string full, string output, string variant, CancellationToken ct)
+    {
+        var scale = variant == "s" ? "scale=360:360:force_original_aspect_ratio=increase,crop=360:360" : "scale='min(1600,iw)':-2";
+        return await Run("ffmpeg", ["-v", "error", "-y", "-protocol_whitelist", "file", "-format_whitelist", "mp3,mov,mp4,m4a,flac",
+                "-i", "file:" + full, "-map", "0:v:0", "-frames:v", "1", "-vf", scale, "-q:v", "4", output], ct)
+            && File.Exists(output) && new FileInfo(output).Length > 0;
     }
 
     private Task<bool> Photo(string full, string output, string variant, CancellationToken ct) =>

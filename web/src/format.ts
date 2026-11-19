@@ -32,8 +32,12 @@ kinds.pdf = 'pdf'
 for (const e of ['txt', 'md', 'log', 'json', 'xml', 'csv', 'ini', 'yml', 'yaml', 'ts', 'tsx', 'js', 'cs', 'py', 'ino', 'c', 'cpp', 'h', 'html', 'css', 'sh', 'conf'])
   kinds[e] = 'text'
 export const previewKind = (ext: string | null): PreviewKind => (ext ? kinds[ext] ?? null : null)
-/** Types the server makes small previews of (same list as MediaIndex on the server). */
-const thumbable = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff', 'dng', 'mp4', 'mov', 'm4v', 'webm', 'mkv', '3gp', 'avi'])
+/** Types the server makes small previews of (same list as Thumbnails.CanPreview on the server):
+ * photos, a frame of a video, the first page of a PDF, the cover inside a music file. */
+const thumbable = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff', 'dng', 'mp4', 'mov', 'm4v', 'webm', 'mkv', '3gp', 'avi',
+  'pdf', 'mp3', 'm4a', 'flac'])
+const videoTypes = new Set(['mp4', 'mov', 'm4v', 'webm', 'mkv', '3gp', 'avi'])
+export const isVideoExt = (ext: string | null) => !!ext && videoTypes.has(ext.toLowerCase())
 export const hasThumb = (ext: string | null) => !!ext && thumbable.has(ext.toLowerCase())
 
 /** Name for a new item that does not clash with existing names (case-insensitive), Windows style. */

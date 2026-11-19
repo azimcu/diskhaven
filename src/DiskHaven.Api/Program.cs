@@ -239,7 +239,7 @@ files.MapGet("/thumb", async (string path, string? drive, string? size, HttpCont
     var bad = Guard(() => { full = drives.Resolve(drive, ctx.User).Browser.GetFile(path); return Results.Empty; });
     if (bad != Results.Empty)
         return bad;
-    if (!DiskHaven.Core.Gallery.MediaIndex.IsMedia(full))
+    if (!Thumbnails.CanPreview(full))
         return Results.NotFound();
     var file = await thumbs.GetAsync(full, size == "m" ? "m" : "s", ct);
     if (file is null)
@@ -254,7 +254,7 @@ files.MapPost("/thumbs/warm", (WarmRequest req, ClaimsPrincipal user, Drives dri
 {
     var d = drives.Resolve(req.Drive, user);
     var media = d.Browser.List(req.Path)
-        .Where(e => e.Kind == EntryKind.File && DiskHaven.Core.Gallery.MediaIndex.IsMedia(e.Name))
+        .Where(e => e.Kind == EntryKind.File && Thumbnails.CanPreview(e.Name))
         .Select(e => d.Root.Resolve(e.Path));
     return Results.Ok(new { queued = thumbs.Warm(media), waiting = thumbs.Queued });
 }));
