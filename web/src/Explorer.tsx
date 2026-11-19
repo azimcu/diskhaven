@@ -128,7 +128,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   // sharing, favourites and previous versions belong to the main storage
   const plugins = { ...basePlugins, has: (id: string) => basePlugins.has(id) && (!onDisk || !['sharing', 'quick', 'versions'].includes(id)) }
   // DiskHaven Gallery: which folders are albums (only the main storage has a gallery)
-  const galleryOn = basePlugins.has('gallery') && !onDisk
+  const galleryOn = basePlugins.has('gallery') && !onDisk && isAdmin   // the gallery is the admin's photo library
   const [galleryAlbums, setGalleryAlbums] = useState<Set<string> | null>(null)
   useEffect(() => {
     if (!galleryOn) { setGalleryAlbums(null); return }
