@@ -26,6 +26,12 @@ yan yana çalışmak için tasarlanmıştır.
 Geliştirme adımları ve ayrıntılar için [README.md](README.md),
 [docs/architecture.md](docs/architecture.md) ve [docs/roadmap.md](docs/roadmap.md).
 
+## Kullanıcılar ve izinler
+
+Yönetici her şeyi görür. Kullanıcı yalnız onunla paylaşılanları görür: bir diskin tamamı, kendi klasörü, görmesi ya da
+değiştirmesi için paylaşılan klasörler ve herkese açık ortak klasör. Paylaşılmayan klasör listede hiç görünmez
+("giriş yasak" da demez). Ayrıntı: [docs/permissions.md](docs/permissions.md).
+
 ## Eklentiler
 
 **Eklentiler** (yönetim panelindeki mağazadan kurulur, veri kaybı olmadan kaldırılır; kurulu olmayan eklentinin kodu tarayıcıya hiç inmez):

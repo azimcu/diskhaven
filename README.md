@@ -36,6 +36,11 @@ downloaded by the browser and their API answers 404.
   "Show hidden items"
 - Resumable, chunked uploads verified with SHA-256; video streaming and previews
 - Recycle bin, search across all subfolders (case- and accent-insensitive)
+- Full-screen photo / video / PDF viewer on phones: swipe, previous / next, share, download; the back gesture closes it
+- Previews of photos, video frames, PDF first pages and music covers
+- Users and permissions: admins see everything; users see only what is shared with them (a whole disk, their own
+  folder, folders shared to read or to change, a common folder). Unshared items are not even listed
+  ([how it works](docs/permissions.md))
 - Light and dark theme; follows the device until you pick one
 - Admin panel: overview, plugin store, users, activity log
 
