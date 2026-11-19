@@ -171,6 +171,8 @@ export const t = {
   cancel: 'Vazgeç',
   ok: 'Tamam',
   close: 'Kapat',
+  sortBy: 'Sırala',
+  foldersFirst: 'Klasörler önce',
   transfers: 'Aktarımlar',
   clearFinished: 'Bitenleri temizle',
   retry: 'Tekrar dene',

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Eye, EyeOff,
   FileArchive, FolderInput, FolderOpen, FolderPlus, FolderUp, Info, LayoutGrid, LayoutList, Link2, List, MoreVertical, PanelRight, Pencil,
-  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X, ArrowUpDown, CheckCheck, Images, ImageOff, ImagePlus,
+  Lock, RefreshCw, Rows3, Scissors, Search, SquareStack, Star, StarOff, Trash2, Upload, CheckCircle2, Circle, CheckSquare, X, ArrowUpDown, ArrowDownUp, CheckCheck, Images, ImageOff, ImagePlus,
 } from 'lucide-react'
 
 const VIEWS = ['icons', 'list', 'details', 'tiles', 'content']
@@ -38,6 +38,9 @@ import { awake } from './awake'
 /** Cut / copied items with the drive they are on ("" = main storage). */
 export interface Clipboard { mode: 'copy' | 'cut'; paths: string[]; drive: string }
 type SortKey = 'name' | 'modified' | 'type' | 'size'
+const SORT_KEYS: [SortKey, string][] = [['name', 'Ad'], ['modified', 'Değiştirme tarihi'], ['type', 'Tür'], ['size', 'Boyut']]
+const sortDirLabel = (k: SortKey, asc: boolean) =>
+  k === 'modified' ? (asc ? 'Eskiden yeniye' : 'Yeniden eskiye') : k === 'size' ? (asc ? 'Küçükten büyüğe' : 'Büyükten küçüğe') : (asc ? "A'dan Z'ye" : "Z'den A'ya")
 type Menu = { x: number; y: number; onItem: boolean; above?: boolean }
 
 const coarse = () => window.matchMedia('(pointer: coarse)').matches
@@ -74,7 +77,24 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
-  const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: 'name', asc: true })
+  // sort order, kept between visits; folders first unless turned off (Windows keeps them first too)
+  const [sort, setSortState] = useState<{ key: SortKey; asc: boolean }>(() => {
+    const [k, a] = readPref('hv.sort', 'name:1').split(':')
+    return { key: (['name', 'modified', 'type', 'size'].includes(k) ? k : 'name') as SortKey, asc: a !== '0' }
+  })
+  const setSort = (v: { key: SortKey; asc: boolean } | ((s: { key: SortKey; asc: boolean }) => { key: SortKey; asc: boolean })) =>
+    setSortState(s => { const n = typeof v === 'function' ? v(s) : v; writePref('hv.sort', `${n.key}:${n.asc ? 1 : 0}`); return n })
+  const [foldersFirst, setFoldersFirstState] = useState(() => readPref('hv.foldersFirst', '1') === '1')
+  const setFoldersFirst = (v: boolean) => { setFoldersFirstState(v); writePref('hv.foldersFirst', v ? '1' : '0') }
+  const [sortMenu, setSortMenu] = useState<{ top?: number; bottom?: number; right: number } | null>(null)
+  const sortBtn = useRef<HTMLButtonElement>(null)
+  const toggleSortMenu = (btn: HTMLElement | null) => {
+    if (sortMenu) return setSortMenu(null)
+    const r = btn?.getBoundingClientRect()
+    if (!r) return
+    const right = Math.max(8, Math.round(window.innerWidth - r.right))
+    setSortMenu(r.top > window.innerHeight / 2 ? { bottom: Math.round(window.innerHeight - r.top + 4), right } : { top: Math.round(r.bottom + 4), right })
+  }
   // view, like Windows Explorer: icons (four preset sizes or any size from the slider / Ctrl + wheel), list,
   // details (columns), tiles (icon + name, type, size) and content (one wide row per item)
   const [view, setViewState] = useState(() => { const v = readPref('hv.view', 'details'); return VIEWS.includes(v) ? v : 'details' })
@@ -130,6 +150,17 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   const [results, setResults] = useState<{ q: string; entries: FileEntry[]; truncated: boolean } | null>(null)
   const [searching, setSearching] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
+  // a long address on a narrow screen shows its end (where you are); the start scrolls off to the left
+  const crumbsRef = useRef<HTMLDivElement>(null)
+  const [crumbsCut, setCrumbsCut] = useState(false)
+  useLayoutEffect(() => {
+    const el = crumbsRef.current
+    if (!el) return
+    const toEnd = () => { el.scrollLeft = el.scrollWidth; setCrumbsCut(el.scrollLeft > 2) }
+    toEnd()
+    window.addEventListener('resize', toEnd)
+    return () => window.removeEventListener('resize', toEnd)
+  }, [path, drive, editingPath, driveInfo?.name])
   const fileInput = useRef<HTMLInputElement>(null)
   const folderInput = useRef<HTMLInputElement>(null)
   const longPress = useRef<number | undefined>(undefined)
@@ -182,20 +213,21 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
   useEffect(() => { listRef.current?.focus({ preventScroll: true }) }, [path, drive])
 
   const shown = useMemo(() => {
-    if (results) return results.entries.filter(e => showHidden || !e.hidden)
-    if (!entries) return []
+    if (!results && !entries) return []
     const f = filter.trim().toLocaleLowerCase('tr-TR')
-    const list = entries.filter(e => (showHidden || !e.hidden) && (!f || e.name.toLocaleLowerCase('tr-TR').includes(f)))
+    const list = results
+      ? results.entries.filter(e => showHidden || !e.hidden)
+      : entries!.filter(e => (showHidden || !e.hidden) && (!f || e.name.toLocaleLowerCase('tr-TR').includes(f)))
     const dir = sort.asc ? 1 : -1
     return list.sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === 'Folder' ? -1 : 1 // folders always first, like Explorer
+      if (foldersFirst && a.kind !== b.kind) return a.kind === 'Folder' ? -1 : 1 // folders first, like Explorer
       let c = 0
       if (sort.key === 'modified') c = a.modified.localeCompare(b.modified)
       else if (sort.key === 'size') c = (a.size ?? 0) - (b.size ?? 0)
       else if (sort.key === 'type') c = collator.compare(typeName(a), typeName(b))
       return (c || collator.compare(a.name, b.name)) * dir
     })
-  }, [entries, filter, sort, results, showHidden])
+  }, [entries, filter, sort, results, showHidden, foldersFirst])
 
   const sel = shown.filter(e => selected.has(e.path))
   const single = sel.length === 1 ? sel[0] : null
@@ -471,6 +503,9 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
             <LayoutGrid size={17} />
           </label>
         )}
+        <button ref={sortBtn} className="cmd" onClick={e => { e.stopPropagation(); toggleSortMenu(e.currentTarget) }} title={t.sortBy} aria-expanded={!!sortMenu} aria-haspopup="menu">
+          <ArrowDownUp size={16} /> <span className="hide-sm">{t.sortBy}</span> <ChevronDown size={13} />
+        </button>
         <div className="view-pick">
           <button ref={viewBtn} className="cmd" onClick={e => { e.stopPropagation(); toggleViewMenu(e.currentTarget) }} title={t.viewMode} aria-expanded={!!viewMenu} aria-haspopup="menu">
             {viewIcon(view)} <span className="hide-sm">{t.viewMode}</span> <ChevronDown size={13} />
@@ -484,6 +519,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
         <button className="pt-btn" onClick={load} title={t.refresh} aria-label={t.refresh}><RefreshCw size={20} /></button>
         <button className="pt-btn" disabled={ro} onClick={newFolder} title={t.newFolder} aria-label={t.newFolder}><FolderPlus size={20} /></button>
         <button className={`pt-btn ${selecting ? 'on' : ''}`} disabled={shown.length === 0} onClick={() => (selecting ? endSelect() : setSelectMode(true))} title="Seç" aria-label="Seç" aria-pressed={selecting}><CheckSquare size={20} /></button>
+        <button className="pt-btn" onClick={e => { e.stopPropagation(); toggleSortMenu(e.currentTarget) }} title={t.sortBy} aria-label={t.sortBy} aria-haspopup="menu"><ArrowDownUp size={20} /></button>
         <button className="pt-btn" onClick={e => { e.stopPropagation(); toggleViewMenu(e.currentTarget) }} title={t.viewMode} aria-label={t.viewMode} aria-haspopup="menu">
           {viewIcon(view, 20)}</button>
       </>, toolSlot)}
@@ -509,6 +545,26 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
         </>
       )}
 
+      {sortMenu && (
+        <>
+          <div className="menu-backdrop" onMouseDown={() => setSortMenu(null)} />
+          <div className="menu view-menu" role="menu" style={{ top: sortMenu.top, bottom: sortMenu.bottom, right: sortMenu.right }} onClick={() => setSortMenu(null)}>
+            <div className="menu-label">{t.sortBy}</div>
+            {SORT_KEYS.map(([k, label]) =>
+              <button key={k} className="menu-item" role="menuitemradio" aria-checked={sort.key === k}
+                onClick={() => setSort(s => s.key === k ? s : { key: k, asc: k === 'name' || k === 'type' })}>
+                <span className="menu-ic">{sort.key === k ? <Check size={15} /> : null}</span>{label}</button>)}
+            <div className="menu-sep" />
+            {([true, false] as const).map(asc =>
+              <button key={String(asc)} className="menu-item" role="menuitemradio" aria-checked={sort.asc === asc} onClick={() => setSort(s => ({ ...s, asc }))}>
+                <span className="menu-ic">{sort.asc === asc ? <Check size={15} /> : asc ? <ArrowUp size={15} /> : <ArrowDown size={15} />}</span>{sortDirLabel(sort.key, asc)}</button>)}
+            <div className="menu-sep" />
+            <button className="menu-item" role="menuitemcheckbox" aria-checked={foldersFirst} onClick={() => setFoldersFirst(!foldersFirst)}>
+              <span className="menu-ic">{foldersFirst ? <Check size={15} /> : <FolderOpen size={15} />}</span>{t.foldersFirst}</button>
+          </div>
+        </>
+      )}
+
       <div className="addressbar">
         <button className="icon-btn" onClick={() => history.back()} title={`${t.back} (Alt+←)`}><ArrowLeft size={16} /></button>
         <button className="icon-btn hide-sm" onClick={() => history.forward()} title={`${t.forward} (Alt+→)`}><ArrowRight size={16} /></button>
@@ -519,7 +575,8 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
             <input name="p" className="path-input" defaultValue={path ? `/${path}` : '/'} autoFocus onBlur={() => setEditingPath(false)} onKeyDown={e => e.key === 'Escape' && setEditingPath(false)} />
           </form>
         ) : (
-          <div className="crumbs" onClick={e => e.target === e.currentTarget && setEditingPath(true)}>
+          <div ref={crumbsRef} className={`crumbs ${crumbsCut ? 'cut-start' : ''}`} onClick={e => e.target === e.currentTarget && setEditingPath(true)}
+            onScroll={e => setCrumbsCut(e.currentTarget.scrollLeft > 2)}>
             <button className={`crumb ${crumbs.length === 0 ? 'current' : ''}`} onClick={() => navigate('')}>{ro && <Lock size={12} />} {rootName}</button>
             {crumbs.map((c, i) => (
               <span key={i} className="crumb-wrap">
@@ -744,6 +801,7 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           onDisk && !ro && { label: t.diskTrash(rootName), icon: <Trash2 size={16} />, run: () => { location.hash = `#/trash/${encodeURIComponent(drive)}` } },
           'sep',
           { label: t.refresh, icon: <RefreshCw size={16} />, hint: 'F5', run: load },
+          { label: t.sortBy, icon: <ArrowDownUp size={16} />, run: () => setTimeout(() => toggleSortMenu(sortBtn.current), 0) },
           { label: t.selectAll, hint: 'Ctrl+A', run: () => setSelected(new Set(shown.map(x => x.path))) },
           { label: t.showHidden, icon: showHidden ? <Check size={15} /> : <Eye size={16} />, run: () => setShowHidden(!showHidden) },
         ]} />
@@ -755,12 +813,15 @@ export function Explorer({ path, drive, driveInfo, version, clipboard, setClipbo
           !ro && { label: t.newFolder, icon: <FolderPlus size={16} />, run: newFolder },
           { label: t.refresh, icon: <RefreshCw size={16} />, run: load },
           shown.length > 0 && { label: t.selectAll, icon: <CheckCheck size={16} />, run: () => { setSelectMode(true); setSelected(new Set(shown.map(x => x.path))) } },
+          { label: t.sortBy, icon: <ArrowDownUp size={16} />, run: () => setTimeout(() => toggleSortMenu(moreBtn.current), 0) },
           { label: t.viewMode, icon: viewIcon(view), run: () => setTimeout(() => toggleViewMenu(moreBtn.current), 0) },
         ]} />
       )}
 
       {viewer && (
         <PreviewModal entry={viewer} onClose={() => setViewer(null)}
+          position={previewable.length > 1 ? `${previewable.indexOf(viewer) + 1} / ${previewable.length}` : undefined}
+          preload={[previewable[previewable.indexOf(viewer) - 1], previewable[previewable.indexOf(viewer) + 1]].filter(Boolean)}
           onPrev={previewable.indexOf(viewer) > 0 ? () => setViewer(previewable[previewable.indexOf(viewer) - 1]) : undefined}
           onNext={previewable.indexOf(viewer) < previewable.length - 1 ? () => setViewer(previewable[previewable.indexOf(viewer) + 1]) : undefined} />
       )}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { albumTitle, browserCanShow, fullDate, gapi, sizeText, type Media } from './gapi'
 import { Icon } from './ui'
+import { useBackToClose } from '../backClose'
 
 interface Props {
   items: Media[]
@@ -21,6 +22,10 @@ export function Viewer({ items, start, onClose, onNeedMore, onDelete, onMove }: 
   const touch = useRef<{ x: number; y: number; t: number; zx: number; zy: number } | null>(null)
   const lastTap = useRef(0)
   const m = items[Math.min(index, items.length - 1)]
+  // the phone's back gesture / back button closes the viewer instead of leaving the gallery
+  useBackToClose(onClose)
+  // a video keeps its bars: tapping it is for its own controls, and the way out must always be on screen
+  useEffect(() => { if (m?.video) setChrome(true) }, [m?.video, m?.path])
 
   useEffect(() => { if (index >= items.length - 5) onNeedMore() }, [index, items.length, onNeedMore])
   useEffect(() => { setZoom({ s: 1, x: 0, y: 0 }) }, [index])
@@ -41,7 +46,8 @@ export function Viewer({ items, start, onClose, onNeedMore, onDelete, onMove }: 
   if (!m) return null
 
   const onStart = (e: React.TouchEvent) => {
-    if (e.touches.length !== 1) return
+    // the video's own controls (play, scrub, full screen) keep their touches
+    if (e.touches.length !== 1 || (e.target as HTMLElement).closest('video, button, a')) { touch.current = null; return }
     touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now(), zx: zoom.x, zy: zoom.y }
   }
   const onMoveT = (e: React.TouchEvent) => {
@@ -65,6 +71,7 @@ export function Viewer({ items, start, onClose, onNeedMore, onDelete, onMove }: 
     if (Math.hypot(mx, my) < 10 && Date.now() - t.t < 300) tap(end.clientX, end.clientY)
   }
   const tap = (x: number, y: number) => {
+    if (m.video) return
     const now = Date.now()
     if (now - lastTap.current < 300 && !m.video) {
       lastTap.current = 0
@@ -79,7 +86,7 @@ export function Viewer({ items, start, onClose, onNeedMore, onDelete, onMove }: 
   const photoSrc = browserCanShow(m.name) && m.size < 12_000_000 ? gapi.original(m.path) : gapi.thumb(m.path, 'm')
 
   return (
-    <div className="g-viewer" onTouchStart={onStart} onTouchMove={onMoveT} onTouchEnd={onEnd}
+    <div className={`g-viewer${m.video ? ' video' : ''}`} onTouchStart={onStart} onTouchMove={onMoveT} onTouchEnd={onEnd}
       onClick={e => { if (!('ontouchstart' in window) && e.target === e.currentTarget) setChrome(c => !c) }}>
       <div className="g-stage" style={{ transform: `translateX(${dx}px)` }}>
         {m.video

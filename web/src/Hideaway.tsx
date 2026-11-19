@@ -304,8 +304,10 @@ function VaultExplorer({ state, onLocked }: { state: HideawayState; onLocked: ()
       <footer className="statusbar"><span>{shown.length} öğe</span>{sel.length > 0 && <span>{sel.length} seçili</span>}<span className="grow" /><span><Lock size={11} /> {state.idleMinutes} dk işlem olmazsa kilitlenir</span></footer>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />}
       {viewer && <PreviewModal entry={viewer} onClose={() => setViewer(null)}
-        onPrev={previewable.indexOf(viewer) > 0 ? () => setViewer(previewable[previewable.indexOf(viewer) - 1]) : undefined}
-        onNext={previewable.indexOf(viewer) < previewable.length - 1 ? () => setViewer(previewable[previewable.indexOf(viewer) + 1]) : undefined} />}
+          position={previewable.length > 1 ? `${previewable.indexOf(viewer) + 1} / ${previewable.length}` : undefined}
+          preload={[previewable[previewable.indexOf(viewer) - 1], previewable[previewable.indexOf(viewer) + 1]].filter(Boolean)}
+          onPrev={previewable.indexOf(viewer) > 0 ? () => setViewer(previewable[previewable.indexOf(viewer) - 1]) : undefined}
+          onNext={previewable.indexOf(viewer) < previewable.length - 1 ? () => setViewer(previewable[previewable.indexOf(viewer) + 1]) : undefined} />}
     </div>
   )
 }
