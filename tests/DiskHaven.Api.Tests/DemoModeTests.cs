@@ -23,6 +23,9 @@ public class DemoModeTests
     [InlineData("POST", "/api/users")]
     [InlineData("DELETE", "/api/users/demo")]
     [InlineData("POST", "/api/shares")]
+    [InlineData("PUT", "/api/access")]
+    [InlineData("PUT", "/api/users/demo/role")]
+    [InlineData("POST", "/api/access/user-folders")]
     public void Blocks_account_disk_and_share_changes(string method, string path) =>
         Assert.True(DemoOptions.IsBlocked(Req(method, path)));
 

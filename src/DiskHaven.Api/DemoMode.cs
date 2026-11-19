@@ -23,7 +23,7 @@ public sealed record DemoOptions(bool Enabled, string UserName, string Password,
         var p = r.Path;
         return p.StartsWithSegments("/api/auth/password") || p.StartsWithSegments("/api/users") ||
                p.StartsWithSegments("/api/shares") || p.StartsWithSegments("/api/disks") || p.StartsWithSegments("/api/sync") ||
-               p.StartsWithSegments("/api/backups") ||
+               p.StartsWithSegments("/api/backups") || p.StartsWithSegments("/api/access") ||
                p.StartsWithSegments("/api/drives") || p.StartsWithSegments("/api/transfers");
     }
 
