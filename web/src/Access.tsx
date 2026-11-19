@@ -34,12 +34,16 @@ function AccessDialog({ entry, me, onClose }: { entry: Pick<FileEntry, 'name' | 
     .sort((a, b) => rank[b.level] - rank[a.level])[0]
 
   const set = async (who: string, level: AccessLevel) => {
+    const before = own
+    const others = (list: Grant[]) => list.filter(x => x.principal.toLowerCase() !== who.toLowerCase())
+    // the tick answers at once; the server confirms (or the old state comes back)
+    setOwn(list => [...others(list), ...(level === 'None' ? [] : [{ id: '', drive: entry.drive ?? '', path: entry.path, principal: who, level, createdBy: me, createdAt: '' }])])
     setBusy(who)
     try {
       const g = await api.setAccess(entry.path, who, level, entry.drive)
-      setOwn(list => [...list.filter(x => x.principal.toLowerCase() !== who.toLowerCase()), ...(g ? [g] : [])])
+      setOwn(list => [...others(list), ...(g ? [g] : [])])
       toast(level === 'None' ? 'Paylaşım kaldırıldı' : 'Paylaşım kaydedildi')
-    } catch (e) { toastError(e) }
+    } catch (e) { setOwn(before); toastError(e) }
     setBusy(null)
   }
 
@@ -71,7 +75,7 @@ function AccessDialog({ entry, me, onClose }: { entry: Pick<FileEntry, 'name' | 
           return (
             <td key={lvl}>
               <input type="checkbox" aria-label={`${typeof label === 'string' ? label : who}: ${name}`}
-                checked={rank[cur] >= rank[lvl] || byAbove} disabled={busy !== null || (byAbove && rank[cur] < rank[lvl])}
+                checked={rank[cur] >= rank[lvl] || byAbove} disabled={busy === who || (byAbove && rank[cur] < rank[lvl])}
                 onChange={e => tick(who, lvl, e.target.checked)} />
             </td>
           )
