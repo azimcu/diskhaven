@@ -151,6 +151,12 @@ a { text-decoration: none; }
   position: absolute; left: 12px; right: 84px; bottom: calc(var(--g-bottom) + 28px); z-index: 3; background: var(--g-surface);
   border-radius: 12px; padding: 10px 12px; box-shadow: var(--g-shadow); font-size: 13px;
 }
+.g-upload { display: block; text-align: left; color: var(--g-text); font: inherit; font-size: 13px; border: 0; cursor: pointer; }
+.g-upload.bad { color: #c62828; }
+.g-up-row small { display: block; }
+.g-up-row.error small { color: #c62828; }
+.g-up-row .g-bar { margin-top: 4px; }
+.g-up-row b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .g-bar { height: 4px; border-radius: 2px; background: var(--g-surface-2); margin-top: 6px; overflow: hidden; }
 .g-bar div { height: 100%; background: var(--g-accent); transition: width .3s; }
 

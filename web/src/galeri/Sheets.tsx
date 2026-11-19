@@ -1,7 +1,7 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { api } from '../api'
 import type { FileEntry, TrashItem } from '../types'
-import { isActive, isDone, uploads } from '../uploads'
+import { isActive, isDone, uploads, type UploadStatus } from '../uploads'
 import { albumTitle, gapi, nameOf, parentOf, type AlbumInfo, type TreeFolder } from './gapi'
 import { Icon, promptSheet, sheet, toast, toastError } from './ui'
 
@@ -201,29 +201,85 @@ function Trash({ done }: { done: (changed: boolean) => void }) {
   )
 }
 
-/** A thin progress strip while photos go up from the phone. */
+/** A thin progress strip while photos go up from the phone. Tapping it opens the live details. */
 export function UploadStrip({ onFinished }: { onFinished: () => void }) {
   const snap = useSyncExternalStore(uploads.subscribe, uploads.getSnapshot)
   const active = snap.items.filter(i => isActive(i.status))
+  const failed = snap.items.filter(i => i.status === 'error')
   const [wasActive, setWasActive] = useState(false)
   useEffect(() => {
     if (active.length > 0) setWasActive(true)
     else if (wasActive) {
       setWasActive(false)
-      const failed = snap.items.filter(i => i.status === 'error').length
-      if (failed) toast(`${failed} dosya yüklenemedi.`, true)
-      else toast('Yükleme bitti.')
+      const sent = snap.items.filter(i => i.status === 'done').length
+      const there = snap.items.filter(i => i.status === 'skipped').length
+      if (failed.length) toast(`${failed.length} dosya yüklenemedi. Ayrıntı için alttaki çubuğa dokun.`, true)
+      else if (sent || there) toast(`Sorunsuz yüklendi: ${sent} dosya, parmak izleri doğrulandı${there ? ` (${there} dosya zaten vardı)` : ''}.`)
       uploads.clearFinished()
       onFinished()
     }
   }, [active.length]) // eslint-disable-line react-hooks/exhaustive-deps
-  if (active.length === 0) return null
+  if (active.length === 0 && failed.length === 0) return null
   const doneCount = snap.items.filter(i => isDone(i.status)).length
   const progress = snap.items.length ? (doneCount + active.reduce((s, i) => s + (i.status === 'uploading' ? i.progress : 0), 0)) / snap.items.length : 0
   return (
-    <div className="g-upload">
-      <span>{active.some(i => i.status === 'waiting') ? 'Bağlantı bekleniyor' : 'Yükleniyor'}: {doneCount}/{snap.items.length}</span>
+    <button className={`g-upload${failed.length && !active.length ? ' bad' : ''}`} onClick={() => void openUploads()} aria-label="Yükleme ayrıntıları">
+      <span>{active.length === 0 ? `${failed.length} dosya yüklenemedi · dokun`
+        : `${active.some(i => i.status === 'waiting') ? 'Bağlantı bekleniyor' : 'Yükleniyor'}: ${doneCount}/${snap.items.length}`}</span>
       <div className="g-bar"><div style={{ width: `${Math.round(progress * 100)}%` }} /></div>
+    </button>
+  )
+}
+
+const stageText: Record<UploadStatus, string> = {
+  queued: 'Sırada', hashing: 'Parmak izi alınıyor', uploading: 'Yükleniyor', verifying: 'Sunucuda doğrulanıyor',
+  waiting: 'Bağlantı bekleniyor', done: 'Yüklendi, doğrulandı', skipped: 'Zaten vardı', error: 'Yüklenemedi', canceled: 'Durduruldu',
+}
+
+/** Live details of the upload, file by file; swipe down (or tap outside) to close and carry on. */
+export function openUploads() {
+  return sheet<void>(done => <UploadDetails done={done} />, undefined)
+}
+
+function UploadDetails({ done }: { done: () => void }) {
+  const snap = useSyncExternalStore(uploads.subscribe, uploads.getSnapshot)
+  const [drag, setDrag] = useState(0)
+  const start = useRef<number | null>(null)
+  const order = (s: UploadStatus) => s === 'error' ? 0 : isActive(s) ? (s === 'queued' ? 2 : 1) : 3
+  const list = [...snap.items].sort((a, b) => order(a.status) - order(b.status) || a.id - b.id)
+  const count = (f: (s: UploadStatus) => boolean) => snap.items.filter(i => f(i.status)).length
+  const ok = count(s => s === 'done'), there = count(s => s === 'skipped'), bad = count(s => s === 'error'), left = count(isActive)
+  return (
+    <div className="g-scrim" onClick={() => done()}>
+      <div className="g-bottom-sheet tall" style={drag ? { transform: `translateY(${drag}px)`, transition: 'none' } : undefined}
+        onClick={e => e.stopPropagation()}
+        onTouchStart={e => { start.current = (e.currentTarget.querySelector('.g-pick-list')?.scrollTop ?? 0) > 0 ? null : e.touches[0].clientY }}
+        onTouchMove={e => { if (start.current !== null) setDrag(Math.max(0, e.touches[0].clientY - start.current)) }}
+        onTouchEnd={() => { if (drag > 90) done(); else setDrag(0); start.current = null }}>
+        <div className="g-handle" />
+        <h2>Yükleme</h2>
+        <p className="g-muted g-pad">
+          {left ? `${left} dosya sürüyor · ` : ''}{ok} yüklendi ve doğrulandı{there ? ` · ${there} zaten vardı` : ''}{bad ? ` · ${bad} yüklenemedi` : ''}.
+          {left > 0 && ' Ekran açık kalırsa en hızlısı; başka uygulamaya geçersen dönünce kaldığı yerden sürer.'}
+        </p>
+        {snap.items.length === 0 && <p className="g-muted g-pad">Yüklenen dosya yok.</p>}
+        <div className="g-pick-list">
+          {list.map(i => (
+            <div key={i.id} className={`g-pick-row static g-up-row ${i.status}`}>
+              <span className="g-pick-icon"><Icon name={i.status === 'error' ? 'close' : isDone(i.status) ? 'check' : 'upload'} /></span>
+              <span><b>{i.relativeName}</b>
+                <small>{stageText[i.status]}{(i.status === 'uploading' || i.status === 'hashing') ? ` · %${Math.round(i.progress * 100)}` : ''}{i.error ? ` · ${i.error}` : ''}</small>
+                {(i.status === 'uploading' || i.status === 'hashing') && <div className="g-bar"><div style={{ width: `${Math.round(i.progress * 100)}%` }} /></div>}
+              </span>
+              {i.status === 'error' && <button className="g-icon-btn accent" onClick={() => uploads.retry(i.id)} aria-label="Tekrar dene"><Icon name="restore" size={20} /></button>}
+              {isActive(i.status) && <button className="g-icon-btn dim" onClick={() => uploads.cancel(i.id)} aria-label="Durdur"><Icon name="close" size={20} /></button>}
+            </div>
+          ))}
+        </div>
+        {bad > 0 && !left
+          ? <button className="g-fill-btn" onClick={() => { uploads.clearFinished(); for (const i of snap.items) if (i.status === 'error') uploads.cancel(i.id); uploads.clearFinished(); done() }}>Hataları temizle ve kapat</button>
+          : <button className="g-fill-btn" onClick={() => done()}>Kapat</button>}
+      </div>
     </div>
   )
 }
